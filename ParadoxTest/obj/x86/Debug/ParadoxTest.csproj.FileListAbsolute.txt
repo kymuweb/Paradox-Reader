@@ -1,0 +1,3 @@
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxTest\bin\Debug\ParadoxTest.exe.config
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxTest\obj\x86\Debug\ParadoxTest.csprojResolveAssemblyReference.cache
+C:\Users\jgarcia.BATHLOCAL\Documents\GitHub\Paradox-Reader\ParadoxTest\bin\Debug\ParadoxTest.exe.config

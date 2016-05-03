@@ -1,0 +1,6 @@
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxReader\bin\Debug\ParadoxReader.dll
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxReader\bin\Debug\ParadoxReader.pdb
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxReader\obj\Debug\ParadoxReader.csprojResolveAssemblyReference.cache
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxReader\obj\Debug\ParadoxReader.dll
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxReader\obj\Debug\ParadoxReader.pdb
+C:\Users\jgarcia.BATHLOCAL\Desktop\paradox-reader\ParadoxReader\bin\Debug\ParadoxReader.exe.config

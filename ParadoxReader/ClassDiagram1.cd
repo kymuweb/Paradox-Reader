@@ -1,0 +1,118 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ClassDiagram MajorVersion="1" MinorVersion="1">
+  <Class Name="ParadoxReader.ParadoxFile">
+    <Position X="0.5" Y="0.5" Width="1.75" />
+    <Compartments>
+      <Compartment Name="Fields" Collapsed="true" />
+      <Compartment Name="Nested Types" Collapsed="false" />
+    </Compartments>
+    <NestedTypes>
+      <Class Name="ParadoxReader.ParadoxFile.V4Hdr" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Db.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+      <Class Name="ParadoxReader.ParadoxFile.DataBlock" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Db.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+      <Class Name="ParadoxReader.ParadoxFile.FieldInfo" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Db.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+    </NestedTypes>
+    <TypeIdentifier>
+      <HashCode>KAAAEpAIAj0AAAAQAEQA1QgAIBBAKAAQa4RAQS0RACQ=</HashCode>
+      <FileName>Db.cs</FileName>
+    </TypeIdentifier>
+    <Lollipop Position="0.2" />
+  </Class>
+  <Class Name="ParadoxReader.ParadoxTable">
+    <Position X="2.5" Y="0.5" Width="1.75" />
+    <Compartments>
+      <Compartment Name="Methods" Collapsed="true" />
+    </Compartments>
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAA=</HashCode>
+      <FileName>Db.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="ParadoxReader.ParadoxRecord">
+    <Position X="4.75" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAEAAAAABAAAAAACAAAAAAAAAAAQAAAABAA=</HashCode>
+      <FileName>Db.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="ParadoxReader.ParadoxPrimaryKey">
+    <Position X="2.5" Y="2.25" Width="1.75" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAABAAEAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Index.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="ParadoxReader.ParadoxCondition">
+    <Position X="2.75" Y="5" Width="1.5" />
+    <Compartments>
+      <Compartment Name="Nested Types" Collapsed="false" />
+    </Compartments>
+    <NestedTypes>
+      <Class Name="ParadoxReader.ParadoxCondition.Compare" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Index.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+      <Class Name="ParadoxReader.ParadoxCondition.Multiple" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Index.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+      <Class Name="ParadoxReader.ParadoxCondition.LogicalOr" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Index.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+      <Class Name="ParadoxReader.ParadoxCondition.LogicalAnd" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Index.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+    </NestedTypes>
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAEAAAAAAAAAA=</HashCode>
+      <FileName>Index.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="ParadoxReader.ParadoxDataReader" Collapsed="true">
+    <Position X="4.5" Y="3.25" Width="1.75" />
+    <TypeIdentifier>
+      <HashCode>BQCQAAAgMCgAAAABCAAABCYgAgJEAEQwIBQAAACAJEA=</HashCode>
+      <FileName>Impl.cs</FileName>
+    </TypeIdentifier>
+    <Lollipop Position="0.279" />
+  </Class>
+  <Enum Name="ParadoxReader.ParadoxFieldTypes">
+    <Position X="4.5" Y="4" Width="1.75" />
+    <TypeIdentifier>
+      <HashCode>AAAQAAGCAAAAAQCIAEACAgAACAgAABABAAAIAAAAAQA=</HashCode>
+      <FileName>Db.cs</FileName>
+    </TypeIdentifier>
+  </Enum>
+  <Enum Name="ParadoxReader.ParadoxFileType">
+    <Position X="0.5" Y="6" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAgAIAAAAAAAAAEAAABAAAgACAAAABEAA=</HashCode>
+      <FileName>Db.cs</FileName>
+    </TypeIdentifier>
+  </Enum>
+  <Enum Name="ParadoxReader.ParadoxCompareOperator">
+    <Position X="4.5" Y="7.75" Width="1.75" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAgAAAAAAAAAAAAEAAQQAAAAQAAAE=</HashCode>
+      <FileName>Index.cs</FileName>
+    </TypeIdentifier>
+  </Enum>
+  <Font Name="Tahoma" Size="8.25" />
+</ClassDiagram>
