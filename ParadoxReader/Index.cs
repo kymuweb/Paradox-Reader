@@ -21,11 +21,11 @@ namespace ParadoxReader
             return Enumerate(condition, (ushort)(this.pxRootBlockId-1), this.pxLevelCount);
         }
 
-        private IEnumerable<ParadoxRecord> Enumerate(ParadoxCondition condition, ushort blockId, int indexLevel)
+        private IEnumerable<ParadoxRecord> Enumerate(ParadoxCondition condition, ushort blockNumber, int indexLevel)
         {
             if (indexLevel == 0)
             {
-                var block = this.table.GetBlock(blockId);
+                var block = this.table.GetBlock(blockNumber);
                 for (int i=0; i<block.RecordCount; i++)
                 {
                     var rec = block[i];
@@ -37,7 +37,7 @@ namespace ParadoxReader
             }
             else
             {
-                var block = this.GetBlock(blockId);
+                var block = this.GetBlock(blockNumber);
                 var blockIdFldIndex = this.FieldCount - 3;
                 for (int i = 0; i < block.RecordCount; i++)
                 {
