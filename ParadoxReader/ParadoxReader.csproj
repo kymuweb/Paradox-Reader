@@ -10,7 +10,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>ParadoxReader</RootNamespace>
     <AssemblyName>ParadoxReader</AssemblyName>
-    <TargetFrameworkVersion>v4.6</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <TargetFrameworkProfile />
   </PropertyGroup>
@@ -41,15 +41,60 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
-    <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Db.cs" />
-    <Compile Include="Impl.cs" />
-    <Compile Include="Index.cs" />
+    <Compile Include="BinaryReaderWriterPdoxExtensions.cs" />
+    <Compile Include="ExtensionMethods.cs" />
+    <Compile Include="NonClosingStreamWrapper.cs" />
+    <Compile Include="IndexOutOfDateException.cs" />
+    <Compile Include="MemoValue.cs" />
+    <Compile Include="ParadoxBlobFile.cs" />
+    <Compile Include="ParadoxCompareOperator.cs" />
+    <Compile Include="ParadoxCondition.Compare.cs" />
+    <Compile Include="ParadoxCondition.cs" />
+    <Compile Include="ParadoxCondition.LogicalAnd.cs" />
+    <Compile Include="ParadoxCondition.LogicalOr.cs" />
+    <Compile Include="ParadoxCondition.Multiple.cs" />
+    <Compile Include="ParadoxFieldTypes.cs" />
+    <Compile Include="ParadoxFile.cs" />
+    <Compile Include="BlockManager.cs" />
+    <Compile Include="DataBlock.cs" />
+    <Compile Include="ParadoxDataReader.cs" />
+    <Compile Include="IndexManager.cs" />
+    <Compile Include="KeySerializer.cs" />
+    <Compile Include="ParadoxFile.DataBlock.cs" />
+    <Compile Include="ParadoxFile.FieldInfo.cs" />
+    <Compile Include="ParadoxFile.V4Hdr.cs" />
+    <Compile Include="ParadoxFileType.cs" />
+    <Compile Include="ParadoxHeaderOffsets.cs" />
+    <Compile Include="ParadoxPrimaryKey.cs" />
+    <Compile Include="ParadoxTableFile.cs" />
+    <Compile Include="ParadoxFileLock.cs" />
+    <Compile Include="ParadoxRecord.cs" />
+    <Compile Include="PrimaryIndexFile.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="PxBlock.cs" />
+    <Compile Include="PxCrypt.cs" />
+    <Compile Include="PxEntry.cs" />
+    <Compile Include="SecondaryIndexFile.cs" />
+    <Compile Include="SecondaryIndexDiscovery.cs" />
+    <Compile Include="SecondaryIndexHandle.cs" />
+    <Compile Include="SecondaryIndexInfo.cs" />
+    <Compile Include="Sql\ParadoxCommand.cs" />
+    <Compile Include="Sql\ParadoxConnection.cs" />
+    <Compile Include="Sql\ParadoxParameter.cs" />
+    <Compile Include="Sql\ParadoxParameterCollection.cs" />
+    <Compile Include="Sql\ParadoxSqlExecutor.cs" />
+    <Compile Include="Sql\SqlAst.cs" />
+    <Compile Include="Sql\SqlDataReader.cs" />
+    <Compile Include="Sql\SqlParser.cs" />
+    <Compile Include="Sql\SqlToken.cs" />
+    <Compile Include="Sql\SqlTokenizer.cs" />
+    <Compile Include="Sql\SqlValueCoercion.cs" />
+    <Compile Include="Sql\WhereTranslator.cs" />
+    <Compile Include="TableRebuilder.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />

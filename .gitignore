@@ -1,3 +1,7 @@
+# Machine-specific local config (SQLRunner path, etc.) - see
+# ParadoxTest/SqlRunner.local.config.example for the template.
+ParadoxTest/SqlRunner.local.config
+
 # Windows image file caches
 Thumbs.db
 ehthumbs.db
@@ -54,3 +58,4 @@ Temporary Items
 bin/
 obj/
 *.LCK
+ParadoxTest/SqlRunner.local.config.example

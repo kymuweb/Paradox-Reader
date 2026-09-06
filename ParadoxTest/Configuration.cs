@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace ParadoxTest
 {
@@ -51,6 +50,41 @@ namespace ParadoxTest
                 dbPath = Path.Combine(dbPath, connectionString_InitialCatalog);
             }
             return dbPath;
+        }
+
+        // Machine-specific; deliberately NOT hard-coded so it never needs to
+        // be committed. Configured via appSettings key "SqlRunnerExePath",
+        // whose value normally comes from ParadoxTest\SqlRunner.local.config
+        // (git-ignored - see SqlRunner.local.config.example for the template).
+        // Falls back to string.Empty when unset/missing, which callers treat
+        // the same as "SQLRunner not found" and skip gracefully.
+        internal static string GetSqlRunnerExePath()
+        {
+            try
+            {
+                return System.Configuration.ConfigurationManager.AppSettings["SqlRunnerExePath"] ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        // Machine-specific real-world corpus directory used by corpustest /
+        // xg0diag / xg0dumpmany default paths. Configured via appSettings key
+        // "CorpusDataRootPath", normally set in ParadoxTest\SqlRunner.local.config
+        // (git-ignored - see SqlRunner.local.config.example). Falls back to
+        // string.Empty when unset/missing.
+        internal static string GetCorpusDataRootPath()
+        {
+            try
+            {
+                return System.Configuration.ConfigurationManager.AppSettings["CorpusDataRootPath"] ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
     }
 }

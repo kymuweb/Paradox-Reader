@@ -1,163 +1,129 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Data.SqlClient;
+using System;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using ParadoxReader;
 
 namespace ParadoxTest
 {
+    /// <summary>
+    /// Command-line entry point for the ParadoxTest harness. Dispatches to:
+    /// - <see cref="CorpusTest"/> for the schema-agnostic, data-folder-driven
+    ///   regression run (the default / "corpustest" mode).
+    /// - <see cref="LibUpdateTest"/> for the dedicated library update/create
+    ///   tests, via <see cref="MiscTests"/> aliases.
+    /// - <see cref="MiscTests"/> for all other one-off diagnostic/test modes
+    ///   (SQLRunner-only mode, harness-only mode, step comparison, PX index
+    ///   growth, password tests, and the legacy TESTTAB.DB "suite").
+    /// </summary>
     internal class Program
     {
-
-
         static void Main(string[] args)
         {
-
-            var dbPath = ParadoxTest.Configuration.GetParadoxDataFolderPath("Test");
-
-            if (!Directory.Exists(dbPath))
+            if (args.Length > 0 && args[0] == "libupdatetest")
             {
-                throw new DirectoryNotFoundException($"Could not find {dbPath}");
+                MiscTests.RunLibUpdateTest();
+                return;
             }
 
-            var testTablePath = string.Empty;
-
-            var dbTableFilePaths = Directory.GetFiles(dbPath, "*.DB");
-            var dbTableFilePathsCount = dbTableFilePaths?.Length ?? 0;
-
-            //var desiredTestTableName = "TESTTAB.DB";
-            var desiredTestTableName = "TESTTABNOINDEX.DB";
-
-            testTablePath = dbTableFilePaths.FirstOrDefault(path => path.IndexOf(desiredTestTableName, StringComparison.OrdinalIgnoreCase) >= 0);
-
-            if (string.IsNullOrWhiteSpace(testTablePath) && dbTableFilePathsCount > 0)
+            if (args.Length > 0 && args[0] == "libcreatetest")
             {
-                Random r = new Random();
-                testTablePath = dbTableFilePaths[r.Next(0, dbTableFilePathsCount)];
+                MiscTests.RunLibCreateTest();
+                return;
             }
 
-            if (string.IsNullOrWhiteSpace(testTablePath) || !File.Exists(testTablePath))
+            if (args.Length > 0 && args[0] == "pxpasswordtest")
             {
-                throw new FileNotFoundException($"Could not find .DB file in {dbPath}");
+                MiscTests.RunPxPasswordTestMode();
+                return;
             }
 
-            Console.WriteLine("Test 1: sequential read first 10 records from start");
-            Console.WriteLine("==========================================================");
-            using (var table = new ParadoxTable(dbPath, Path.GetFileName(testTablePath)))
+            if (args.Length > 0 && args[0] == "pxpasswordwritetest")
             {
-                var recIndex = 1;
-                foreach (var rec in table.Enumerate())
-                {
-                    Console.WriteLine("Record #{0}", recIndex);
-                    for (int i = 0; i < table.FieldCount; i++)
-                    {
-                        var fieldName = table.FieldNames[i] ?? string.Empty;
-                        var dataValue = rec.DataValues[i];
-                        var dataValueToStr = dataValue?.ToString() ?? string.Empty;
-                        if(dataValue != null && dataValue is byte[])
-                        {
-                            dataValueToStr = Convert.ToBase64String((byte[])dataValue);
-                        }
-                        Console.WriteLine("    {0} = {1}", fieldName, dataValueToStr);
-                    }
-
-
-                    var now = DateTime.Now;
-
-                    var tmpDataValues = new object[rec.DataValues.Length];
-                    for (int i = 0; i < rec.DataValues.Length; i++)
-                    {
-                        var value = rec.DataValues[i];
-                        if (value is ICloneable cloneable)
-                            tmpDataValues[i] = cloneable.Clone();
-                        else if (value is byte[] bytes)
-                            tmpDataValues[i] = (byte[])bytes.Clone();
-                        else
-                            tmpDataValues[i] = value; // Value types and immutable types (like string)
-                    }
-
-                    tmpDataValues[0] = 9; // 9;
-                    tmpDataValues[1] = "ZZZ"; // ZZZ
-                    tmpDataValues[2] = 999.99d;
-                    tmpDataValues[3] = 999.99d;
-                    tmpDataValues[4] = (short)999;
-                    tmpDataValues[5] = 999;
-                    tmpDataValues[6] = 999.99d; // 999.99M;
-                    tmpDataValues[7] = now;
-                    tmpDataValues[8] = now.TimeOfDay;
-                    tmpDataValues[9] = now;
-                    tmpDataValues[10] = false;
-                    //tmpDataValues[11] = new byte[] { (byte)9 };
-                    //tmpDataValues[12] = new byte[] { (byte)9 };
-                    //tmpDataValues[13] = "ZZZ";
-
-                    Console.WriteLine("Setting Record #{0}", recIndex);
-
-                    rec.DataValues = tmpDataValues;
-
-                    Console.WriteLine("Re-reading Record #{0}", recIndex);
-                    for (int i = 0; i < table.FieldCount; i++)
-                    {
-                        var fieldName = table.FieldNames[i] ?? string.Empty;
-                        var dataValue = rec.DataValues[i];
-                        var dataValueToStr = dataValue?.ToString() ?? string.Empty;
-                        if (dataValue != null && dataValue is byte[])
-                        {
-                            dataValueToStr = Convert.ToBase64String((byte[])dataValue);
-                        }
-                        Console.WriteLine("    {0} = {1}", fieldName, dataValueToStr);
-                    }
-
-
-                    
-                    if (++recIndex > 1) break;
-                }
-
-
-
-
-
-                Console.WriteLine("-- press any key to continue --");
-                Console.ReadKey();
-                //Console.Clear();
-
-                //Console.WriteLine("Test 2: read 10 records by index (key range: 3 -> 4)");
-                //Console.WriteLine("==========================================================");
-
-                //using (var index = table.PrimaryKeyIndex)
-                //{
-                //    if (index != null)
-                //    {
-                //        var condition =
-                //            new ParadoxCondition.LogicalAnd(
-                //                new ParadoxCondition.Compare(ParadoxCompareOperator.GreaterOrEqual, 3, 0, 0),
-                //                new ParadoxCondition.Compare(ParadoxCompareOperator.LessOrEqual, 4, 0, 0));
-                //        var qry = index.Enumerate(condition);
-                //        using (var rdr = new ParadoxDataReader(table, qry))
-                //        {
-                //            recIndex = 1;
-                //            while (rdr.Read())
-                //            {
-                //                Console.WriteLine("Record #{0}", recIndex);
-                //                for (int i = 0; i < rdr.FieldCount; i++)
-                //                {
-                //                    Console.WriteLine("    {0} = {1}", rdr.GetName(i), rdr[i]);
-                //                }
-
-                //                if (++recIndex > 10) { break; }
-                //            }
-                //        }
-                //    }
-                //}
+                string writeTestPath = args.Length > 1 ? args[1] : @"C:\temp\pxpwtest\testtab_passworded_withdata.DB";
+                MiscTests.RunPxPasswordWriteTestMode(writeTestPath);
+                return;
             }
 
-            Console.WriteLine("-- press any key to continue --");
-            Console.ReadKey();
+            if (args.Length > 0 && args[0] == "rebuildtest")
+            {
+                MiscTests.RunRebuildTestMode();
+                return;
+            }
 
+            if (args.Length > 0 && args[0] == "indexoutofdatetest")
+            {
+                MiscTests.RunIndexOutOfDateTestMode();
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "sqlenginetest")
+            {
+                SqlEngineTest.Run();
+                return;
+            }
+
+            if ((args.Length > 0 && args[0] == "corpustest") || args.Length == 0)
+            {
+                // Usage: ParadoxTest.exe [corpustest] [dataRoot] [maxTables] [filter]
+                // Schema-agnostic test mode: walks every table found in
+                // dataRoot (default: bin\Debug\data, i.e. the folder we're
+                // executing from, falling back to the CorpusDataRootPath
+                // appSetting if set), infers each table's schema from its own
+                // header, and exercises append/update/read/lookup operations
+                // against it, comparing against SQLRunner where available.
+                // By default only a small random sample of tables is
+                // processed (maxTables=12) so a full corpus (which can be
+                // hundreds of tables) isn't scanned unintentionally; pass an
+                // explicit maxTables (e.g. 0 for no limit) to override.
+                string dataRoot = args.Length > 1 ? args[1] : null;
+                int maxTables = args.Length > 2 && int.TryParse(args[2], out var mt) ? mt : 12;
+                string filter = args.Length > 3 ? args[3] : null;
+                Trace.Listeners.Add(new ConsoleTraceListener());
+                CorpusTest.Run(dataRoot, maxTables, filter);
+                return;
+            }
+
+            // Before doing anything else that might launch SQLRunner, make
+            // sure we're starting from a genuinely clean state: no stray
+            // SQLRunner process left over from a prior hung/killed run, and
+            // no leftover *.LCK files. Without this, a previous crash can
+            // silently leave a zombie SQLRunner (or lock) around that then
+            // fights with the next run.
+            MiscTests.EnsureCleanState();
+
+            if (args.Length > 0 && args[0] == "sqlrunnermode")
+            {
+                MiscTests.RunSqlRunnerMode();
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "harnessmode")
+            {
+                MiscTests.RunHarnessMode();
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "comparesteps")
+            {
+                MiscTests.RunCompareStepsMode();
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "growpxindex")
+            {
+                int targetCount = args.Length > 1 && int.TryParse(args[1], out var n) ? n : 5000;
+                MiscTests.RunGrowPxIndexModePublic(targetCount);
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "suite")
+            {
+                // Usage: ParadoxTest.exe suite [TABLENAME.DB]
+                // Runs the standard Test 1-6 suite against the given fixture
+                // table (must exist in ParadoxTest\data alongside its
+                // .PX/.MB/secondary index files). Defaults to TESTTAB.DB.
+                string tableName = args.Length > 1 ? args[1] : null;
+                MiscTests.RunSuiteMode(tableName);
+                return;
+            }
         }
     }
 }

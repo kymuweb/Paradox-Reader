@@ -19,6 +19,16 @@ using System.Runtime.InteropServices;
 // COM, set the ComVisible attribute to true on that type.
 [assembly: ComVisible(false)]
 
+// Grants ParadoxTest access to internal members (FieldTypes, primaryKeyFields,
+// etc.) so the corpus-wide dynamic schema test harness can introspect a
+// table's real on-disk layout without hardcoding it.
+[assembly: InternalsVisibleTo("ParadoxTest")]
+
+// Grants ParadoxDesktop access to internal members (FieldTypes, FieldInfo,
+// etc.) so the DataGridView table editor can introspect a table's field
+// types/sizes for column binding and the structure-info dialog.
+[assembly: InternalsVisibleTo("ParadoxDesktop")]
+
 // The following GUID is for the ID of the typelib if this project is exposed to COM
 [assembly: Guid("84323420-fcd5-4c70-a430-d2915ad6693d")]
 
