@@ -82,9 +82,10 @@ namespace ParadoxDesktop
             this.fieldsListView.FullRowSelect = true;
             this.fieldsListView.GridLines = true;
             this.fieldsListView.HideSelection = false;
+            this.fieldsListView.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) | System.Windows.Forms.AnchorStyles.Left) | System.Windows.Forms.AnchorStyles.Right)));
             this.fieldsListView.Location = new System.Drawing.Point(12, 56);
             this.fieldsListView.Name = "fieldsListView";
-            this.fieldsListView.Size = new System.Drawing.Size(460, 140);
+            this.fieldsListView.Size = new System.Drawing.Size(596, 150);
             this.fieldsListView.TabIndex = 3;
             this.fieldsListView.UseCompatibleStateImageBehavior = false;
             this.fieldsListView.View = System.Windows.Forms.View.Details;
@@ -120,15 +121,16 @@ namespace ParadoxDesktop
             this.editorPanel.Controls.Add(this.fieldNameLabel);
             this.editorPanel.Controls.Add(this.addUpdateFieldButton);
             this.editorPanel.Controls.Add(this.removeFieldButton);
-            this.editorPanel.Location = new System.Drawing.Point(12, 200);
+            this.editorPanel.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left) | System.Windows.Forms.AnchorStyles.Right)));
+            this.editorPanel.Location = new System.Drawing.Point(12, 214);
             this.editorPanel.Name = "editorPanel";
-            this.editorPanel.Size = new System.Drawing.Size(460, 42);
+            this.editorPanel.Size = new System.Drawing.Size(596, 42);
             this.editorPanel.TabIndex = 4;
             //
             // fieldPrimaryKeyCheckBox
             //
             this.fieldPrimaryKeyCheckBox.AutoSize = true;
-            this.fieldPrimaryKeyCheckBox.Location = new System.Drawing.Point(300, 8);
+            this.fieldPrimaryKeyCheckBox.Location = new System.Drawing.Point(372, 8);
             this.fieldPrimaryKeyCheckBox.Name = "fieldPrimaryKeyCheckBox";
             this.fieldPrimaryKeyCheckBox.Size = new System.Drawing.Size(51, 17);
             this.fieldPrimaryKeyCheckBox.TabIndex = 8;
@@ -137,7 +139,7 @@ namespace ParadoxDesktop
             //
             // fieldSizeNumericUpDown
             //
-            this.fieldSizeNumericUpDown.Location = new System.Drawing.Point(240, 6);
+            this.fieldSizeNumericUpDown.Location = new System.Drawing.Point(310, 6);
             this.fieldSizeNumericUpDown.Maximum = new decimal(new int[] { 255, 0, 0, 0 });
             this.fieldSizeNumericUpDown.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             this.fieldSizeNumericUpDown.Name = "fieldSizeNumericUpDown";
@@ -148,7 +150,7 @@ namespace ParadoxDesktop
             // fieldSizeLabel
             //
             this.fieldSizeLabel.AutoSize = true;
-            this.fieldSizeLabel.Location = new System.Drawing.Point(210, 9);
+            this.fieldSizeLabel.Location = new System.Drawing.Point(280, 9);
             this.fieldSizeLabel.Name = "fieldSizeLabel";
             this.fieldSizeLabel.Size = new System.Drawing.Size(27, 13);
             this.fieldSizeLabel.TabIndex = 6;
@@ -158,15 +160,15 @@ namespace ParadoxDesktop
             //
             this.fieldTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
             this.fieldTypeComboBox.FormattingEnabled = true;
-            this.fieldTypeComboBox.Location = new System.Drawing.Point(140, 6);
+            this.fieldTypeComboBox.Location = new System.Drawing.Point(172, 6);
             this.fieldTypeComboBox.Name = "fieldTypeComboBox";
-            this.fieldTypeComboBox.Size = new System.Drawing.Size(90, 21);
+            this.fieldTypeComboBox.Size = new System.Drawing.Size(100, 21);
             this.fieldTypeComboBox.TabIndex = 5;
             //
             // fieldTypeLabel
             //
             this.fieldTypeLabel.AutoSize = true;
-            this.fieldTypeLabel.Location = new System.Drawing.Point(105, 9);
+            this.fieldTypeLabel.Location = new System.Drawing.Point(135, 9);
             this.fieldTypeLabel.Name = "fieldTypeLabel";
             this.fieldTypeLabel.Size = new System.Drawing.Size(34, 13);
             this.fieldTypeLabel.TabIndex = 4;
@@ -185,12 +187,12 @@ namespace ParadoxDesktop
             //
             this.fieldNameTextBox.Location = new System.Drawing.Point(40, 6);
             this.fieldNameTextBox.Name = "fieldNameTextBox";
-            this.fieldNameTextBox.Size = new System.Drawing.Size(60, 20);
+            this.fieldNameTextBox.Size = new System.Drawing.Size(80, 20);
             this.fieldNameTextBox.TabIndex = 1;
             //
             // addUpdateFieldButton
             //
-            this.addUpdateFieldButton.Location = new System.Drawing.Point(300, 4);
+            this.addUpdateFieldButton.Location = new System.Drawing.Point(440, 4);
             this.addUpdateFieldButton.Name = "addUpdateFieldButton";
             this.addUpdateFieldButton.Size = new System.Drawing.Size(75, 23);
             this.addUpdateFieldButton.TabIndex = 9;
@@ -201,7 +203,7 @@ namespace ParadoxDesktop
             // removeFieldButton
             //
             this.removeFieldButton.Enabled = false;
-            this.removeFieldButton.Location = new System.Drawing.Point(381, 4);
+            this.removeFieldButton.Location = new System.Drawing.Point(521, 4);
             this.removeFieldButton.Name = "removeFieldButton";
             this.removeFieldButton.Size = new System.Drawing.Size(75, 23);
             this.removeFieldButton.TabIndex = 10;
@@ -211,8 +213,9 @@ namespace ParadoxDesktop
             //
             // indexesLabel
             //
+            this.indexesLabel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.indexesLabel.AutoSize = true;
-            this.indexesLabel.Location = new System.Drawing.Point(12, 250);
+            this.indexesLabel.Location = new System.Drawing.Point(12, 264);
             this.indexesLabel.Name = "indexesLabel";
             this.indexesLabel.Size = new System.Drawing.Size(84, 13);
             this.indexesLabel.TabIndex = 5;
@@ -220,19 +223,21 @@ namespace ParadoxDesktop
             //
             // indexesListBox
             //
+            this.indexesListBox.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left) | System.Windows.Forms.AnchorStyles.Right)));
             this.indexesListBox.FormattingEnabled = true;
-            this.indexesListBox.Location = new System.Drawing.Point(12, 268);
+            this.indexesListBox.Location = new System.Drawing.Point(12, 282);
             this.indexesListBox.Name = "indexesListBox";
-            this.indexesListBox.Size = new System.Drawing.Size(367, 82);
+            this.indexesListBox.Size = new System.Drawing.Size(497, 90);
             this.indexesListBox.TabIndex = 6;
             //
             // indexButtonsPanel
             //
             this.indexButtonsPanel.Controls.Add(this.removeIndexButton);
             this.indexButtonsPanel.Controls.Add(this.addEditIndexButton);
-            this.indexButtonsPanel.Location = new System.Drawing.Point(385, 268);
+            this.indexButtonsPanel.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
+            this.indexButtonsPanel.Location = new System.Drawing.Point(521, 282);
             this.indexButtonsPanel.Name = "indexButtonsPanel";
-            this.indexButtonsPanel.Size = new System.Drawing.Size(87, 82);
+            this.indexButtonsPanel.Size = new System.Drawing.Size(87, 90);
             this.indexButtonsPanel.TabIndex = 7;
             //
             // removeIndexButton
@@ -257,8 +262,9 @@ namespace ParadoxDesktop
             //
             // okButton
             //
+            this.okButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.okButton.DialogResult = System.Windows.Forms.DialogResult.OK;
-            this.okButton.Location = new System.Drawing.Point(316, 381);
+            this.okButton.Location = new System.Drawing.Point(452, 397);
             this.okButton.Name = "okButton";
             this.okButton.Size = new System.Drawing.Size(75, 23);
             this.okButton.TabIndex = 8;
@@ -268,8 +274,9 @@ namespace ParadoxDesktop
             //
             // cancelButton
             //
+            this.cancelButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
             this.cancelButton.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.cancelButton.Location = new System.Drawing.Point(397, 381);
+            this.cancelButton.Location = new System.Drawing.Point(533, 397);
             this.cancelButton.Name = "cancelButton";
             this.cancelButton.Size = new System.Drawing.Size(75, 23);
             this.cancelButton.TabIndex = 9;
@@ -282,7 +289,7 @@ namespace ParadoxDesktop
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.cancelButton;
-            this.ClientSize = new System.Drawing.Size(484, 416);
+            this.ClientSize = new System.Drawing.Size(620, 432);
             this.Controls.Add(this.cancelButton);
             this.Controls.Add(this.okButton);
             this.Controls.Add(this.indexButtonsPanel);
@@ -293,9 +300,10 @@ namespace ParadoxDesktop
             this.Controls.Add(this.tableNameTextBox);
             this.Controls.Add(this.tableNameLabel);
             this.Controls.Add(this.summaryLabel);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
+            this.MaximizeBox = true;
             this.MinimizeBox = false;
+            this.MinimumSize = new System.Drawing.Size(500, 350);
             this.Name = "TableStructureForm";
             this.ShowInTaskbar = false;
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
