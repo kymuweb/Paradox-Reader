@@ -255,6 +255,95 @@ namespace ParadoxTest
                 InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (NAME) VALUES ('abc" + i + "')"
             });
 
+            // 7. INTEGER primary key + ALPHA field + a MEMO field (left untouched
+            // - only ID/NAME are ever written, to keep this minimal).
+            cases.Add(new CaseDefinition
+            {
+                Name = "PKALPMEMO",
+                Schema = new TableSchemaDefinition
+                {
+                    Fields =
+                    {
+                        new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
+                        new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
+                        new TableFieldDefinition("NOTES", ParadoxFieldTypes.MemoBLOb, 250, false),
+                    }
+                },
+                SqlRunnerDdl = new List<string>
+                {
+                    "CREATE TABLE '{PATH}' (ID INTEGER, NAME CHARACTER(20), NOTES BLOB(240,1), PRIMARY KEY (ID))"
+                },
+                InsertSqlRunner = "INSERT INTO '{PATH}' (ID, NAME) VALUES (1, 'abc')",
+                InsertOurs = new object[] { 1, "abc", null },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (ID, NAME) VALUES (" + (i + 1) + ", 'abc" + i + "')"
+            });
+
+            // 8. INTEGER primary key + ALPHA field + a BLOb field (left untouched).
+            cases.Add(new CaseDefinition
+            {
+                Name = "PKALPBLOB",
+                Schema = new TableSchemaDefinition
+                {
+                    Fields =
+                    {
+                        new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
+                        new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
+                        new TableFieldDefinition("FILEVAL", ParadoxFieldTypes.BLOb, 250, false),
+                    }
+                },
+                SqlRunnerDdl = new List<string>
+                {
+                    "CREATE TABLE '{PATH}' (ID INTEGER, NAME CHARACTER(20), FILEVAL BLOB(240,2), PRIMARY KEY (ID))"
+                },
+                InsertSqlRunner = "INSERT INTO '{PATH}' (ID, NAME) VALUES (1, 'abc')",
+                InsertOurs = new object[] { 1, "abc", null },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (ID, NAME) VALUES (" + (i + 1) + ", 'abc" + i + "')"
+            });
+
+            // 9. AUTOINC primary key + ALPHA field + a MEMO field (left untouched).
+            cases.Add(new CaseDefinition
+            {
+                Name = "AUTOALPMEMO",
+                Schema = new TableSchemaDefinition
+                {
+                    Fields =
+                    {
+                        new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
+                        new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
+                        new TableFieldDefinition("NOTES", ParadoxFieldTypes.MemoBLOb, 250, false),
+                    }
+                },
+                SqlRunnerDdl = new List<string>
+                {
+                    "CREATE TABLE '{PATH}' (ID AUTOINC, NAME CHARACTER(20), NOTES BLOB(240,1), PRIMARY KEY (ID))"
+                },
+                InsertSqlRunner = "INSERT INTO '{PATH}' (NAME) VALUES ('abc')",
+                InsertOurs = new object[] { null, "abc", null },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (NAME) VALUES ('abc" + i + "')"
+            });
+
+            // 10. AUTOINC primary key + ALPHA field + a BLOb field (left untouched).
+            cases.Add(new CaseDefinition
+            {
+                Name = "AUTOALPBLOB",
+                Schema = new TableSchemaDefinition
+                {
+                    Fields =
+                    {
+                        new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
+                        new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
+                        new TableFieldDefinition("FILEVAL", ParadoxFieldTypes.BLOb, 250, false),
+                    }
+                },
+                SqlRunnerDdl = new List<string>
+                {
+                    "CREATE TABLE '{PATH}' (ID AUTOINC, NAME CHARACTER(20), FILEVAL BLOB(240,2), PRIMARY KEY (ID))"
+                },
+                InsertSqlRunner = "INSERT INTO '{PATH}' (NAME) VALUES ('abc')",
+                InsertOurs = new object[] { null, "abc", null },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (NAME) VALUES ('abc" + i + "')"
+            });
+
             return cases;
         }
 

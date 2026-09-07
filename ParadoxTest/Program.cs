@@ -191,7 +191,7 @@ namespace ParadoxTest
             if (args.Length > 0 && args[0] == "rebuildcomparetest")
             {
                 // Usage: ParadoxTest.exe rebuildcomparetest
-                // For the same six schema shapes as headercomparetest, builds
+                // For the same schema shapes as headercomparetest, builds
                 // a pristine SQLRunner original (no data + 1 row), then
                 // rebuilds copies of each via BDE's Pdxrbld.exe and via
                 // ParadoxReader.TableRebuilder.Rebuild, producing six

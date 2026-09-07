@@ -10,8 +10,9 @@ namespace ParadoxTest
 {
     /// <summary>
     /// Rebuild-focused counterpart to <see cref="HeaderCompareTest"/>: for the
-    /// same five schema cases (NOIDX, PKONLY, PKALPHA, PKALPHIDX,
-    /// AUTOALPIDX; AUTOPK was scrapped - see HeaderCompareTest.BuildCases()
+    /// schema cases defined in <see cref="HeaderCompareTest.BuildCases"/>
+    /// (NOIDX, PKONLY, PKALPHA, PKALPHIDX, AUTOALPIDX, PKALPMEMO, PKALPBLOB,
+    /// AUTOALPMEMO, AUTOALPBLOB; AUTOPK was scrapped - see BuildCases()
     /// remarks), builds each table fresh via SQLRunner (real BDE), then
     /// produces six datasets per case:
     ///
