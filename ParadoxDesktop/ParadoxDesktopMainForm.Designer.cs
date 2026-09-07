@@ -59,8 +59,8 @@
             this.infoStructureMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.modifyStructureMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.tableRebuildMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.smsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
-            this.runSmsMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.sqlMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+            this.runSqlMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItemHelp = new System.Windows.Forms.ToolStripMenuItem();
             this.openFileDialog = new System.Windows.Forms.OpenFileDialog();
@@ -74,7 +74,7 @@
             this.editMenuItem,
             this.recordMenuItem,
             this.tableMenuItem,
-            this.smsMenuItem,
+            this.sqlMenuItem,
             this.helpMenuItem});
             this.menuStrip.Location = new System.Drawing.Point(0, 0);
             this.menuStrip.Name = "menuStrip";
@@ -310,21 +310,21 @@
             this.tableRebuildMenuItem.Text = "Table &Rebuild";
             this.tableRebuildMenuItem.Click += new System.EventHandler(this.tableRebuildMenuItem_Click);
             //
-            // smsMenuItem
+            // sqlMenuItem
             //
-            this.smsMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.runSmsMenuItem});
-            this.smsMenuItem.Name = "smsMenuItem";
-            this.smsMenuItem.Size = new System.Drawing.Size(42, 20);
-            this.smsMenuItem.Text = "&SMS";
+            this.sqlMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.runSqlMenuItem});
+            this.sqlMenuItem.Name = "sqlMenuItem";
+            this.sqlMenuItem.Size = new System.Drawing.Size(42, 20);
+            this.sqlMenuItem.Text = "&SQL";
             //
-            // runSmsMenuItem
+            // runSqlMenuItem
             //
-            this.runSmsMenuItem.Name = "runSmsMenuItem";
-            this.runSmsMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
-            this.runSmsMenuItem.Size = new System.Drawing.Size(180, 22);
-            this.runSmsMenuItem.Text = "&Run SMS";
-            this.runSmsMenuItem.Click += new System.EventHandler(this.runSmsMenuItem_Click);
+            this.runSqlMenuItem.Name = "runSqlMenuItem";
+            this.runSqlMenuItem.ShortcutKeys = System.Windows.Forms.Keys.F8;
+            this.runSqlMenuItem.Size = new System.Drawing.Size(180, 22);
+            this.runSqlMenuItem.Text = "&Run SQL";
+            this.runSqlMenuItem.Click += new System.EventHandler(this.runSqlMenuItem_Click);
             //
             // helpMenuItem
             //
@@ -397,8 +397,8 @@
         private System.Windows.Forms.ToolStripMenuItem tableMenuItem;
         private System.Windows.Forms.ToolStripMenuItem infoStructureMenuItem;
         private System.Windows.Forms.ToolStripMenuItem tableRebuildMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem smsMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem runSmsMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem sqlMenuItem;
+        private System.Windows.Forms.ToolStripMenuItem runSqlMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItemHelp;
         private System.Windows.Forms.OpenFileDialog openFileDialog;

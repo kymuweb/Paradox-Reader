@@ -43,13 +43,14 @@ namespace ParadoxReader
             entrySize     = keyDataSize + POINTER_SIZE;
             blockCapacity = this.maxTableSize * 0x400 - HEADER_SIZE;
 
-            // BDE/Pdxrbld considers an index out of date if its own
-            // autoIncVal (offset 0x49) doesn't match the parent .DB's after
-            // an AutoInc field is assigned. Flag it here (without throwing)
-            // so callers can check IsOutOfDate; Enumerate still throws if
-            // actually used.
-            if (table.autoIncVal != 0 && this.autoIncVal != table.autoIncVal)
-                IsOutOfDate = true;
+            // Historically flagged as out of date whenever this index's own
+            // autoIncVal (offset 0x49) didn't match the parent .DB's.
+            // DISPROVEN by direct comparison against a real,
+            // BDE-confirmed-good Pdxrbld rebuild of a real corpus table
+            // (PatientBlobs, 135 rows): its own .PX autoIncVal was 1 while
+            // the .DB's was 135 - every index file legitimately tracks its
+            // own independent autoIncVal, unrelated to the parent .DB's.
+            // No longer used as an out-of-date signal.
         }
 
         /// <summary>

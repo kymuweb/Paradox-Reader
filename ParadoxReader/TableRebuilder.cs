@@ -192,7 +192,7 @@ namespace ParadoxReader
                     if (ext.Equals(".MB", StringComparison.OrdinalIgnoreCase))
                         CreateEmptyBlobSkeleton(src, dest);
                     else
-                        CreateEmptyTableSkeleton(src, dest, table.autoIncVal);
+                        CreateEmptyTableSkeleton(src, dest);
 
                     swapPairs.Add(new FilePair(src, dest));
                 }
@@ -377,22 +377,12 @@ namespace ParadoxReader
         /// <summary>
         /// Clones just the header portion of a .DB/.PX/.Xnn/.Xgn/.Ynn/.Ygn
         /// file (preserving schema, field definitions, table name, sort
-        /// order, and autoIncVal) and resets the fields that describe its
-        /// (now empty) data: RecordCount, block chain pointers, PX root
-        /// block id/level count, change counters, and maxBlocks.
+        /// order, and its own existing autoIncVal) and resets the fields
+        /// that describe its (now empty) data: RecordCount, block chain
+        /// pointers, PX root block id/level count, change counters, and
+        /// maxBlocks.
         /// </summary>
-        /// <param name="autoIncVal">
-        /// The parent .DB's current autoIncVal, forced into every skeleton's
-        /// header (overriding whatever value the source index file itself
-        /// had) so the freshly rebuilt .DB/.PX/secondary-index set all agree
-        /// from the outset. Without this, an index that was out of date
-        /// before the rebuild (the very case TableRebuilder exists to fix)
-        /// would carry its stale autoIncVal straight into the rebuilt
-        /// skeleton, making IndexManager/ParadoxPrimaryKey immediately flag
-        /// the brand-new index as out of date again and throw
-        /// <see cref="IndexOutOfDateException"/> on the first insert.
-        /// </param>
-        private static void CreateEmptyTableSkeleton(string srcPath, string destPath, int autoIncVal)
+        private static void CreateEmptyTableSkeleton(string srcPath, string destPath)
         {
             byte[] header = ReadHeaderBytes(srcPath);
 
@@ -411,11 +401,21 @@ namespace ParadoxReader
             ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount2, 1);
             ZeroRegion(header, ParadoxHeaderOffsets.MaxBlocks, 2);
 
-            if (header.Length >= ParadoxHeaderOffsets.AutoIncVal + 4)
-            {
-                byte[] autoIncBytes = BitConverter.GetBytes(autoIncVal);
-                Array.Copy(autoIncBytes, 0, header, ParadoxHeaderOffsets.AutoIncVal, 4);
-            }
+            // NOTE: autoIncVal (@0x49) is intentionally left as zero here,
+            // NOT forced to mirror the parent .DB's autoIncVal. Direct
+            // comparison against a real, BDE-confirmed-good Pdxrbld
+            // rebuild of a real corpus table (PatientBlobs, 135 rows)
+            // disproved the prior assumption that every index file's
+            // autoIncVal must equal the .DB's: the known-good rebuild had
+            // .PX=1, .XG0=135, .YG0=3 against a .DB of 135 - each index's
+            // own autoIncVal is independent bookkeeping, not a mirrored
+            // copy. Every record is re-inserted into this skeleton via the
+            // normal ParadoxTableFile.InsertRecord path, which already
+            // calls IndexManager.SyncAutoIncVal(...) itself whenever an
+            // AutoInc field is assigned (see
+            // ParadoxTableFile.AssignAutoIncValues), so each index file's
+            // autoIncVal ends up correctly reflecting its own real usage
+            // without this skeleton pre-seeding it with the wrong value.
 
             // changeCount4 (V4Hdr) only physically exists when the header
             // region is large enough to contain it.

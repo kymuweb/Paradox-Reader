@@ -29,7 +29,7 @@ namespace ParadoxDesktop
         private SqlEditorForm ActiveSqlEditor => ActiveMdiChild as SqlEditorForm;
 
         // ----------------------------------------------------------------
-        // MDI child activation: keep Table/Record/SMS menus in sync with
+        // MDI child activation: keep Table/Record/SQL menus in sync with
         // whichever kind of child window is currently active.
         // ----------------------------------------------------------------
 
@@ -40,7 +40,7 @@ namespace ParadoxDesktop
 
             tableMenuItem.Enabled = tableActive;
             recordMenuItem.Enabled = tableActive;
-            smsMenuItem.Enabled = sqlActive;
+            sqlMenuItem.Enabled = sqlActive;
         }
 
         // ----------------------------------------------------------------
@@ -293,15 +293,15 @@ namespace ParadoxDesktop
         }
 
         // ----------------------------------------------------------------
-        // SMS menu
+        // SQL menu
         // ----------------------------------------------------------------
 
-        private void runSmsMenuItem_Click(object sender, EventArgs e)
+        private void runSqlMenuItem_Click(object sender, EventArgs e)
         {
             var editor = ActiveSqlEditor;
             if (editor == null)
             {
-                MessageBox.Show(this, "No SQL file is currently open.", "Run SMS",
+                MessageBox.Show(this, "No SQL file is currently open.", "Run SQL",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }

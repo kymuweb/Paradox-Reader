@@ -9,7 +9,7 @@ namespace ParadoxDesktop
 {
     /// <summary>
     /// Floating MDI child window providing a simple SQL script editor and
-    /// runner ("SMS" - Run SMS, F8) against Paradox tables via the
+    /// runner ("SQL" - Run SQL, F8) against Paradox tables via the
     /// <see cref="ParadoxReader.Sql"/> ADO.NET-style wrapper
     /// (<see cref="ParadoxConnection"/>/<see cref="ParadoxCommand"/>).
     /// Multiple statements (separated by blank lines or ';') are executed in
@@ -26,7 +26,7 @@ namespace ParadoxDesktop
         }
 
         /// <summary>
-        /// Runs the SQL script currently in the editor (Run SMS, F8). Bare
+        /// Runs the SQL script currently in the editor (Run SQL, F8). Bare
         /// table names are resolved relative to <paramref name="baseDirectory"/>
         /// if provided (typically the directory of the currently/most-recently
         /// open table), else the current working directory.
@@ -98,7 +98,7 @@ namespace ParadoxDesktop
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "SMS run failed:\r\n" + ex.Message, "Run SMS",
+                MessageBox.Show(this, "SQL run failed:\r\n" + ex.Message, "Run SQL",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 statusLabel.Text = "Run failed: " + ex.Message;
             }

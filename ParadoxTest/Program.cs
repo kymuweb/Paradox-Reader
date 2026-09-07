@@ -165,6 +165,17 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "checkindexoutofdate")
+            {
+                // Usage: ParadoxTest.exe checkindexoutofdate <full path to .DB>
+                string dbPath = args[1];
+                using (var t = new ParadoxReader.ParadoxTableFile(dbPath))
+                {
+                    Console.WriteLine("IndexOutOfDate = {0}", t.IndexOutOfDate);
+                }
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "suite")
             {
                 // Usage: ParadoxTest.exe suite [TABLENAME.DB]

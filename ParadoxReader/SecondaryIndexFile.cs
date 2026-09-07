@@ -676,15 +676,43 @@ namespace ParadoxReader
                 var newRoot = AllocateBlock();
                 newRoot.LeftChildBlockNumber = indexFile.pxRootBlockId;
                 SplitChild(newRoot, 0, root);
+                // Update the level count BEFORE recursing into InsertNonFull so
+                // IsLeafAtDepth (which relies on indexFile.pxLevelCount to know
+                // the tree's current depth) sees the post-split depth. This
+                // level-count-based check is only trustworthy for a tree we
+                // are actively building/maintaining ourselves (as here), since
+                // we update pxLevelCount consistently on every split/merge -
+                // unlike EnumerateNode's block-range heuristic below, which
+                // exists specifically because pxLevelCount is unreliable on
+                // arbitrary pre-existing real-world index files.
+                UpdateLevelCount((byte)(indexFile.pxLevelCount + 1));
                 InsertNonFull(newRoot, entry);
                 WriteBlock(newRoot);
                 UpdateRootBlockId(newRoot.BlockNumber);
-                UpdateLevelCount((byte)(indexFile.pxLevelCount + 1));
             }
             else
             {
                 InsertNonFull(root, entry);
             }
+        }
+
+        /// <summary>
+        /// Leaf classification for the insert write-path, based on this
+        /// index's own authoritative pxLevelCount rather than the ambiguous
+        /// block-number-range heuristic in <see cref="IsLeafNode"/>. That
+        /// heuristic misclassifies a leaf's entries as branch pointers when a
+        /// leaf entry's .DB block number happens to fall inside this index
+        /// file's own (small) valid block range - a real, reproducible case
+        /// on small freshly-rebuilt tables (e.g. a 6-row table whose leaf
+        /// entries reference .DB blocks 1-6, indistinguishable by number
+        /// alone from this index's own block 1). Since we are the ones
+        /// building/maintaining this tree via BTreeInsert/SplitChild, our own
+        /// pxLevelCount is always accurate for it, making a depth comparison
+        /// unambiguous.
+        /// </summary>
+        private bool IsLeafAtDepth(int depth)
+        {
+            return depth >= Math.Max(indexFile.pxLevelCount - 1, 0);
         }
 
         private void InsertNonFull(PxBlock node, PxEntry entry, int depth = 0)
@@ -695,7 +723,7 @@ namespace ParadoxReader
                     "the index file appears to be corrupt or cyclic. Consider using TableRebuilder.Rebuild to rebuild the table and its indexes.");
 
             int i = node.Entries.Count - 1;
-            if (IsLeafNode(node))
+            if (IsLeafAtDepth(depth))
             {
                 node.Entries.Add(null);
                 while (i >= 0 && CompareKeys(entry.KeyData, node.Entries[i].KeyData) < 0)

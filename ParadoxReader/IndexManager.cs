@@ -74,19 +74,27 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Compares an index file's own autoIncVal header field (offset
-        /// 0x49) against the parent .DB's autoIncVal. BDE/Pdxrbld considers
-        /// an index out of date if this doesn't match after an AutoInc
-        /// field is assigned (see PrimaryIndexFile.SyncAutoIncVal); a
-        /// nonzero mismatch means the index predates (or postdates) the
-        /// current data and must be treated as stale, mirroring BDE's
-        /// "Index is out of date" error rather than silently returning
-        /// wrong/empty lookup results or corrupting the index further on
-        /// write.
+        /// Historically compared an index file's own autoIncVal header
+        /// field (offset 0x49) against the parent .DB's autoIncVal,
+        /// treating any mismatch as "index out of date". This assumption
+        /// is now DISPROVEN by direct comparison against a real,
+        /// BDE-confirmed-good Pdxrbld rebuild of a real corpus table
+        /// (PatientBlobs): its own .PX/.XG0/.YG0 autoIncVal values were 1,
+        /// 135, and 3 respectively, while the .DB's autoIncVal was 135 -
+        /// i.e. every index file legitimately has its own independent
+        /// autoIncVal, unrelated to (and not required to match) the
+        /// parent .DB's. Using this as an out-of-date signal produced
+        /// false positives on perfectly valid, BDE-verified files (and
+        /// presumably contributed to writing incorrect autoIncVal values
+        /// into rebuilt indexes, since TableRebuilder previously forced
+        /// this same wrong mirroring assumption when synthesizing
+        /// skeletons). Disabled until the real BDE staleness signal (if
+        /// any exists beyond changeCount1/changeCount2 synchronization) is
+        /// identified from further real-file evidence.
         /// </summary>
         private static bool IsIndexOutOfDate(int indexAutoIncVal, int dbAutoIncVal)
         {
-            return dbAutoIncVal != 0 && indexAutoIncVal != dbAutoIncVal;
+            return false;
         }
 
 
