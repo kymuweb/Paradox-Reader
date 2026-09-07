@@ -44,6 +44,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CorpusTest.cs" />
+    <Compile Include="HeaderCompareTest.cs" />
     <Compile Include="Net35Compat.cs" />
     <Compile Include="LibUpdateTest.cs" />
     <Compile Include="MiscTests.cs" />

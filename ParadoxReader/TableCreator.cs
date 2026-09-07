@@ -44,13 +44,25 @@ namespace ParadoxReader
                 File.WriteAllBytes(pxPath, pxHeader);
             }
 
+            // Every index this library creates corresponds to a named index
+            // (equivalent to SQLRunner's CREATE INDEX), which real BDE always
+            // names .XGn/.YGn with a sequential ordinal - confirmed by
+            // comparing SQLRunner's CREATE INDEX output against our creation
+            // path (see ParadoxHeaderBuilder.BuildSecondaryIndexHeader remarks).
             int indexOrdinal = 0;
             foreach (var index in schema.Indexes)
             {
-                string extension = "." + "X" + (indexOrdinal++).ToString().PadLeft(2, '0');
-                string indexPath = Path.ChangeExtension(dbFilePath, extension);
-                byte[] indexHeader = ParadoxHeaderBuilder.BuildSecondaryIndexHeader(schema, index);
-                File.WriteAllBytes(indexPath, indexHeader);
+                string ordinal = (indexOrdinal++).ToString();
+                string xExt = ".XG" + ordinal;
+                string yExt = ".YG" + ordinal;
+
+                string xPath = Path.ChangeExtension(dbFilePath, xExt);
+                byte[] xHeader = ParadoxHeaderBuilder.BuildSecondaryIndexHeader(schema, index);
+                File.WriteAllBytes(xPath, xHeader);
+
+                string yPath = Path.ChangeExtension(dbFilePath, yExt);
+                byte[] yHeader = ParadoxHeaderBuilder.BuildMaintainedFieldHeader(schema, index);
+                File.WriteAllBytes(yPath, yHeader);
             }
         }
     }

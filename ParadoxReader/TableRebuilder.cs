@@ -255,13 +255,24 @@ namespace ParadoxReader
                         File.Delete(src);
                 }
 
+                // Every index this library creates corresponds to a named
+                // index (equivalent to SQLRunner's CREATE INDEX), which real
+                // BDE always names .XGn/.YGn with a sequential ordinal - see
+                // ParadoxHeaderBuilder.BuildSecondaryIndexHeader remarks.
                 int indexOrdinal = 0;
                 foreach (var index in newSchema.Indexes)
                 {
-                    string ext = ".X" + (indexOrdinal++).ToString().PadLeft(2, '0');
-                    string tempIndexDest = Path.Combine(dir, tempBaseName + ext);
+                    string ordinal = (indexOrdinal++).ToString();
+                    string xExt = ".XG" + ordinal;
+                    string yExt = ".YG" + ordinal;
+
+                    string tempIndexDest = Path.Combine(dir, tempBaseName + xExt);
                     File.WriteAllBytes(tempIndexDest, ParadoxHeaderBuilder.BuildSecondaryIndexHeader(newSchema, index));
-                    swapPairs.Add(new FilePair(Path.ChangeExtension(dbFilePath, ext), tempIndexDest));
+                    swapPairs.Add(new FilePair(Path.ChangeExtension(dbFilePath, xExt), tempIndexDest));
+
+                    string tempYDest = Path.Combine(dir, tempBaseName + yExt);
+                    File.WriteAllBytes(tempYDest, ParadoxHeaderBuilder.BuildMaintainedFieldHeader(newSchema, index));
+                    swapPairs.Add(new FilePair(Path.ChangeExtension(dbFilePath, yExt), tempYDest));
                 }
 
                 bool hasBlobField = newSchema.Fields.Any(f =>

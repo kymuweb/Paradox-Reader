@@ -176,6 +176,18 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "headercomparetest")
+            {
+                // Usage: ParadoxTest.exe headercomparetest
+                // Creates a range of schema shapes both via ParadoxReader
+                // (TableCreator) and via SQLRunner (real BDE), byte-diffs
+                // their headers at creation time and again after one insert,
+                // to investigate whether our creation logic matches BDE's
+                // "from scratch" byte layout.
+                HeaderCompareTest.Run();
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "suite")
             {
                 // Usage: ParadoxTest.exe suite [TABLENAME.DB]
