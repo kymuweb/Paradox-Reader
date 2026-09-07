@@ -52,6 +52,7 @@
     <Compile Include="Configuration.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="RebuildCompareTest.cs" />
     <Compile Include="SqlEngineTest.cs" />
   </ItemGroup>
   <ItemGroup>

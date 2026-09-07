@@ -188,6 +188,38 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "rebuildcomparetest")
+            {
+                // Usage: ParadoxTest.exe rebuildcomparetest
+                // For the same six schema shapes as headercomparetest, builds
+                // a pristine SQLRunner original (no data + 1 row), then
+                // rebuilds copies of each via BDE's Pdxrbld.exe and via
+                // ParadoxReader.TableRebuilder.Rebuild, producing six
+                // datasets per case. Verifies each with a SQLRunner
+                // "select count(*)" oracle and byte/header-diffs every
+                // meaningful pairing (orig vs pdxrbld, orig vs ourrebuild,
+                // pdxrbld vs ourrebuild) to isolate what our rebuild does
+                // differently.
+                RebuildCompareTest.Run();
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "checkrebuildcount")
+            {
+                // Usage: ParadoxTest.exe checkrebuildcount <full path to .DB> [expectedCount]
+                // Standalone SQLRunner "select count(*)" oracle check against
+                // a single table, e.g. to confirm/reproduce a reported
+                // rebuild failure before running the full comparison suite.
+                // If expectedCount is omitted, just prints the parsed count
+                // without a PASS/FAIL verdict (SQLRunner reports "Read 1
+                // rows." even for empty tables, so 0 is never a meaningful
+                // expectation here).
+                string countDbPath = args[1];
+                int expectedCount = args.Length > 2 ? int.Parse(args[2]) : -1;
+                RebuildCompareTest.CheckCount(countDbPath, expectedCount);
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "suite")
             {
                 // Usage: ParadoxTest.exe suite [TABLENAME.DB]

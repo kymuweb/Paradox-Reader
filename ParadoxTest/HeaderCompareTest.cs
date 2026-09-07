@@ -37,13 +37,21 @@ namespace ParadoxTest
         private const string RootDir = @"c:\temp\headercompare";
         private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
 
-        private class CaseDefinition
+        internal class CaseDefinition
         {
             public string Name;
             public TableSchemaDefinition Schema;
             public List<string> SqlRunnerDdl; // CREATE TABLE + CREATE INDEX statements
             public string InsertSqlRunner;    // INSERT INTO statement for the post-insert pass
             public object[] InsertOurs;       // field values for ParadoxTableFile.InsertRecord
+
+            /// <summary>
+            /// Generates a distinct-row INSERT INTO statement (with "{PATH}"
+            /// placeholder) for the given zero-based row index, used to build
+            /// multi-row datasets (e.g. 3+ rows) without violating PRIMARY KEY
+            /// uniqueness. Defaults to a variant of InsertSqlRunner if not set.
+            /// </summary>
+            public Func<int, string> InsertSqlRunnerForRow;
         }
 
         public static void Run()
@@ -121,7 +129,7 @@ namespace ParadoxTest
         // Case definitions
         // --------------------------------------------------------------
 
-        private static List<CaseDefinition> BuildCases()
+        internal static List<CaseDefinition> BuildCases()
         {
             var cases = new List<CaseDefinition>();
 
@@ -141,7 +149,8 @@ namespace ParadoxTest
                     "CREATE TABLE '{PATH}' (VAL INTEGER)"
                 },
                 InsertSqlRunner = "INSERT INTO '{PATH}' (VAL) VALUES (1)",
-                InsertOurs = new object[] { 1 }
+                InsertOurs = new object[] { 1 },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (VAL) VALUES (" + (i + 1) + ")"
             });
 
             // 2. INTEGER primary key (plain .PX, no secondary index).
@@ -160,27 +169,18 @@ namespace ParadoxTest
                     "CREATE TABLE '{PATH}' (ID INTEGER, PRIMARY KEY (ID))"
                 },
                 InsertSqlRunner = "INSERT INTO '{PATH}' (ID) VALUES (1)",
-                InsertOurs = new object[] { 1 }
+                InsertOurs = new object[] { 1 },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (ID) VALUES (" + (i + 1) + ")"
             });
 
             // 3. AUTOINC primary key.
-            cases.Add(new CaseDefinition
-            {
-                Name = "AUTOPK",
-                Schema = new TableSchemaDefinition
-                {
-                    Fields =
-                    {
-                        new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
-                    }
-                },
-                SqlRunnerDdl = new List<string>
-                {
-                    "CREATE TABLE '{PATH}' (ID AUTOINC, PRIMARY KEY (ID))"
-                },
-                InsertSqlRunner = "INSERT INTO '{PATH}' (ID) VALUES (0)",
-                InsertOurs = new object[] { null }
-            });
+            // NOTE: Scrapped - SQLRunner rejects "INSERT INTO ... (ID)
+            // VALUES (0)" for AUTOINC columns ("Errored; check Query
+            // manually."), and there's no other field on this table to
+            // anchor an INSERT that omits ID, so there's no known SQLRunner
+            // syntax to insert a row into an AUTOINC-only table. See
+            // AUTOALPIDX below for the workaround used when a second field
+            // exists (omit ID entirely and let it auto-assign).
 
             // 4. INTEGER primary key + an ALPHA field (no secondary index on it).
             cases.Add(new CaseDefinition
@@ -199,7 +199,8 @@ namespace ParadoxTest
                     "CREATE TABLE '{PATH}' (ID INTEGER, NAME CHARACTER(20), PRIMARY KEY (ID))"
                 },
                 InsertSqlRunner = "INSERT INTO '{PATH}' (ID, NAME) VALUES (1, 'abc')",
-                InsertOurs = new object[] { 1, "abc" }
+                InsertOurs = new object[] { 1, "abc" },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (ID, NAME) VALUES (" + (i + 1) + ", 'abc" + i + "')"
             });
 
             // 5. INTEGER primary key + ALPHA field which is ALSO a secondary index.
@@ -224,7 +225,8 @@ namespace ParadoxTest
                     "CREATE INDEX NAMEIDX ON '{PATH}' (NAME)"
                 },
                 InsertSqlRunner = "INSERT INTO '{PATH}' (ID, NAME) VALUES (1, 'abc')",
-                InsertOurs = new object[] { 1, "abc" }
+                InsertOurs = new object[] { 1, "abc" },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (ID, NAME) VALUES (" + (i + 1) + ", 'abc" + i + "')"
             });
 
             // 6. AUTOINC primary key + ALPHA field which is ALSO a secondary index.
@@ -248,14 +250,15 @@ namespace ParadoxTest
                     "CREATE TABLE '{PATH}' (ID AUTOINC, NAME CHARACTER(20), PRIMARY KEY (ID))",
                     "CREATE INDEX NAMEIDX ON '{PATH}' (NAME)"
                 },
-                InsertSqlRunner = "INSERT INTO '{PATH}' (ID, NAME) VALUES (0, 'abc')",
-                InsertOurs = new object[] { null, "abc" }
+                InsertSqlRunner = "INSERT INTO '{PATH}' (NAME) VALUES ('abc')",
+                InsertOurs = new object[] { null, "abc" },
+                InsertSqlRunnerForRow = i => "INSERT INTO '{PATH}' (NAME) VALUES ('abc" + i + "')"
             });
 
             return cases;
         }
 
-        private static TableSchemaDefinition CloneSchemaWithName(TableSchemaDefinition schema, string baseName)
+        internal static TableSchemaDefinition CloneSchemaWithName(TableSchemaDefinition schema, string baseName)
         {
             var clone = new TableSchemaDefinition { TableName = baseName };
             foreach (var f in schema.Fields)
