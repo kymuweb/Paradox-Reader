@@ -182,6 +182,34 @@ namespace ParadoxReader
             var swapPairs = new List<FilePair>();
             string oldMbPath = sourceFiles.FirstOrDefault(f => Path.GetExtension(f).Equals(".MB", StringComparison.OrdinalIgnoreCase));
 
+            // Snapshot changeCount1/changeCount2 (.DB, offset 0x2D/0x2E) and the
+            // write counter (.PX/secondary index, offset 0x2C) from every
+            // existing file *before* building empty skeletons, so they can be
+            // restored verbatim after record reinsertion. See the remarks in
+            // CreateEmptyTableSkeleton for why: a clean, single-pass BDE
+            // Pdxrbld rebuild leaves these exact bytes unchanged from the
+            // pre-rebuild source, rather than resetting/recomputing them, and
+            // Paradox 7/SQLRunner reject a rebuilt table whose bytes don't
+            // match this expectation ("Index is out of date"). Only applies to
+            // the plain compact-and-repair path (newSchema == null); Modify
+            // Structure synthesizes brand-new files from scratch instead.
+            var preservedChangeCounts = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            if (newSchema == null)
+            {
+                foreach (var src in sourceFiles)
+                {
+                    string ext = Path.GetExtension(src);
+                    if (ext.Equals(".MB", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    byte[] header = ReadHeaderBytes(src);
+                    if (ext.Equals(".DB", StringComparison.OrdinalIgnoreCase))
+                        preservedChangeCounts[ext] = new[] { header[ParadoxHeaderOffsets.ChangeCount1], header[ParadoxHeaderOffsets.ChangeCount2] };
+                    else
+                        preservedChangeCounts[ext] = new[] { header[ParadoxHeaderOffsets.WriteCounter] };
+                }
+            }
+
             if (newSchema == null)
             {
                 foreach (var src in sourceFiles)
@@ -273,6 +301,39 @@ namespace ParadoxReader
                     ClearStaleBlobReferences(values, newFieldTypes);
                     newTable.InsertRecord(values);
                     migrated++;
+                }
+            }
+
+            // ------------------------------------------------------------
+            // 4b. Restore the pre-rebuild changeCount1/changeCount2 (.DB)
+            //     and write counter (.PX/secondary index) bytes captured in
+            //     step 3, overwriting whatever value the normal per-insert
+            //     increment path above left behind. See the snapshot capture
+            //     above and CreateEmptyTableSkeleton's remarks for why.
+            // ------------------------------------------------------------
+            if (newSchema == null)
+            {
+                foreach (var pair in swapPairs)
+                {
+                    string ext = Path.GetExtension(pair.Temp);
+                    if (!preservedChangeCounts.TryGetValue(ext, out var saved))
+                        continue;
+
+                    using (var fs = new FileStream(pair.Temp, FileMode.Open, FileAccess.Write, FileShare.None))
+                    {
+                        if (ext.Equals(".DB", StringComparison.OrdinalIgnoreCase))
+                        {
+                            fs.Position = ParadoxHeaderOffsets.ChangeCount1;
+                            fs.WriteByte(saved[0]);
+                            fs.Position = ParadoxHeaderOffsets.ChangeCount2;
+                            fs.WriteByte(saved[1]);
+                        }
+                        else
+                        {
+                            fs.Position = ParadoxHeaderOffsets.WriteCounter;
+                            fs.WriteByte(saved[0]);
+                        }
+                    }
                 }
             }
 
@@ -397,25 +458,53 @@ namespace ParadoxReader
             ZeroRegion(header, ParadoxHeaderOffsets.BlockChain, 8); // nextBlock+fileBlocks+firstBlock+lastBlock
             ZeroRegion(header, ParadoxHeaderOffsets.PxRootBlockId, 2);
             ZeroRegion(header, ParadoxHeaderOffsets.PxLevelCount, 1);
-            ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount1, 1);
-            ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount2, 1);
+            // NOTE: changeCount1/changeCount2 (0x2D/0x2E) and the .PX/secondary
+            // index writeCounter (0x2C) are deliberately NOT zeroed here anymore.
+            // Binary-search bisection against a minimal single-PK-only repro
+            // table (no secondary indexes) proved these bytes are the actual
+            // discriminating fields behind Paradox 7/SQLRunner's "Index is out
+            // of date" rejection of our rebuilt tables: a clean, single-pass
+            // BDE Pdxrbld rebuild of the exact same source file leaves its .DB
+            // changeCount1/changeCount2 and its .PX writeCounter completely
+            // UNCHANGED from the pre-rebuild source (verified byte-for-byte
+            // identical, and reproducible across repeated independent Pdxrbld
+            // runs on the same input). Our previous implementation zeroed
+            // these fields and let the normal per-record-insert increment path
+            // (ParadoxTableFile.IncrementChangeCount /
+            // PrimaryIndexFile.IncrementWriteCounter /
+            // SecondaryIndexFile.IncrementWriteCounter) recompute them from 0
+            // during the rebuild's record-reinsertion loop, which produced a
+            // value equal to the migrated record count instead of the
+            // preserved original value - this is corrected below in
+            // RebuildCore, which snapshots these exact bytes before the
+            // rebuild and restores them verbatim afterward once every record
+            // has been re-inserted.
             ZeroRegion(header, ParadoxHeaderOffsets.MaxBlocks, 2);
 
-            // NOTE: autoIncVal (@0x49) is intentionally left as zero here,
-            // NOT forced to mirror the parent .DB's autoIncVal. Direct
-            // comparison against a real, BDE-confirmed-good Pdxrbld
-            // rebuild of a real corpus table (PatientBlobs, 135 rows)
-            // disproved the prior assumption that every index file's
-            // autoIncVal must equal the .DB's: the known-good rebuild had
-            // .PX=1, .XG0=135, .YG0=3 against a .DB of 135 - each index's
-            // own autoIncVal is independent bookkeeping, not a mirrored
-            // copy. Every record is re-inserted into this skeleton via the
-            // normal ParadoxTableFile.InsertRecord path, which already
-            // calls IndexManager.SyncAutoIncVal(...) itself whenever an
-            // AutoInc field is assigned (see
-            // ParadoxTableFile.AssignAutoIncValues), so each index file's
-            // autoIncVal ends up correctly reflecting its own real usage
-            // without this skeleton pre-seeding it with the wrong value.
+            // autoIncVal (@0x49) semantics were re-derived via a 4-case
+            // SQLRunner "oracle" matrix (SELECT COUNT(*) via SQLRunner
+            // returns exactly 1 row when the index is structurally valid,
+            // and silently falls back to a degenerate scan returning N rows
+            // when it is not) covering: single-field INTEGER PK + secondary
+            // index, composite 2-field INTEGER PK, AUTOINC PK + two
+            // secondary indexes, and no PK (no .PX) + one secondary index.
+            // Every case with a .PX file failed real BDE/Paradox 7
+            // validation ("Index is out of date") after this rebuild left
+            // its pre-existing, stale autoIncVal byte value untouched in
+            // the skeleton. Real BDE's own Pdxrbld rebuild was independently
+            // confirmed (across all three .PX-bearing cases, regardless of
+            // PK shape or whether the table even had an AutoInc field) to
+            // always write exactly 1 into .PX's autoIncVal, so that is
+            // reproduced explicitly below. Secondary index
+            // (.Xnn/.Xgn/.Ynn/.Ygn) autoIncVal is left as whatever the clone
+            // carried over: every record is re-inserted into this skeleton
+            // via the normal ParadoxTableFile.InsertRecord path, which calls
+            // IndexManager.SyncAutoIncVal(...) itself whenever an AutoInc
+            // field is assigned (see ParadoxTableFile.AssignAutoIncValues),
+            // so those files' autoIncVal ends up correctly reflecting their
+            // own real usage regardless of this skeleton's starting value.
+            if (fileType == ParadoxFileType.PxFile)
+                Array.Copy(BitConverter.GetBytes(1), 0, header, ParadoxHeaderOffsets.AutoIncVal, 4);
 
             // changeCount4 (V4Hdr) only physically exists when the header
             // region is large enough to contain it.

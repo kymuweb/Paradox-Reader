@@ -506,16 +506,20 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Mirrors the parent .DB file's V4Hdr changeCount4 (offset 0x70) into
-        /// this index file. BDE/Pdxrbld compares this "table version" counter
-        /// against the index's own copy to decide whether the index is out
-        /// of date.
+        /// Previously mirrored the parent .DB file's V4Hdr changeCount4
+        /// (offset 0x70) into this index file. Disproven by direct
+        /// experiment: a 4-case SQLRunner matrix showed the secondary
+        /// index's changeCount4 is always 0 in both SQLRunner-created
+        /// originals and BDE's own Pdxrbld rebuilds, regardless of the
+        /// .DB's own changeCount4/record count. Mirroring it here corrupted
+        /// every rebuilt secondary index (changeCount4 ended up matching
+        /// the migrated record count instead of staying 0), which
+        /// contributes to Paradox 7's "Index is out of date" on rebuilt
+        /// tables. So this is a no-op again.
         /// </summary>
         public void SyncTableVersion(short changeCount4)
         {
-            indexFile.stream.Position = ParadoxHeaderOffsets.ChangeCount4;
-            using (var w = new BinaryWriter(new NonClosingStreamWrapper(indexFile.stream), Encoding.Default))
-                w.Write(changeCount4);
+            // Intentionally no-op; see summary above.
         }
 
         /// <summary>
