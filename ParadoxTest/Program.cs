@@ -48,6 +48,20 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "freshrebuildtest")
+            {
+                // Usage: ParadoxTest.exe freshrebuildtest [insertCount]
+                // Creates a brand-new table via SQLRunner (real BDE), rebuilds
+                // it with TableRebuilder, and compares rebuilt vs. pristine to
+                // isolate whether TableRebuilder itself corrupts an
+                // otherwise-known-good table, independent of any pre-existing
+                // corruption in a corpus table. Defaults to 0 records (empty
+                // table); pass 1 to test the smallest non-empty case.
+                int insertCount = args.Length > 1 && int.TryParse(args[1], out var ic) ? ic : 0;
+                MiscTests.RunFreshRebuildTest(insertCount);
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "indexoutofdatetest")
             {
                 MiscTests.RunIndexOutOfDateTestMode();
@@ -109,10 +123,45 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "comparerebuild")
+            {
+                // Usage: ParadoxTest.exe comparerebuild <dir> <baseNameA> <baseNameB>
+                //     or ParadoxTest.exe comparerebuild <dirA> <baseNameA> <dirB> <baseNameB>
+                // Byte-compares (and header-decodes) all files sharing a base
+                // name (.DB/.MB/.PX/.XGn/.YGn) between two rebuilds, e.g. our
+                // rebuild vs. the pdxrbld rebuild of the same source table:
+                //   ParadoxTest.exe comparerebuild c:\temp\paradoxtest PatientBlobs_ourrebuild PatientBlobs_pdxrbldrebuild
+                if (args.Length == 4)
+                {
+                    MiscTests.RunCompareRebuildMode(args[1], args[2], args[3]);
+                }
+                else if (args.Length == 5)
+                {
+                    MiscTests.RunCompareRebuildMode(args[1], args[2], args[3], args[4]);
+                }
+                else
+                {
+                    Console.WriteLine("Usage: ParadoxTest.exe comparerebuild <dir> <baseNameA> <baseNameB>");
+                    Console.WriteLine("   or: ParadoxTest.exe comparerebuild <dirA> <baseNameA> <dirB> <baseNameB>");
+                }
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "growpxindex")
             {
                 int targetCount = args.Length > 1 && int.TryParse(args[1], out var n) ? n : 5000;
                 MiscTests.RunGrowPxIndexModePublic(targetCount);
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "rebuildpath")
+            {
+                // Usage: ParadoxTest.exe rebuildpath <full path to .DB>
+                // Runs TableRebuilder.Rebuild directly against an arbitrary
+                // existing .DB file in-place (for ad hoc corpus verification).
+                string dbPath = args[1];
+                var result = ParadoxReader.TableRebuilder.Rebuild(dbPath);
+                Console.WriteLine("Rebuilt {0}: {1} record(s) migrated.", dbPath, result.RecordsMigrated);
                 return;
             }
 

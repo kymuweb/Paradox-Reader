@@ -396,6 +396,13 @@ namespace ParadoxReader
         {
             byte[] header = ReadHeaderBytes(srcPath);
 
+            var fileType = (ParadoxFileType)header[ParadoxHeaderOffsets.FileType];
+            bool isSecondaryIndex =
+                fileType == ParadoxFileType.XnnFileNonInc || fileType == ParadoxFileType.XnnFileInc ||
+                fileType == ParadoxFileType.YnnFile ||
+                fileType == ParadoxFileType.XgnFileNonInc || fileType == ParadoxFileType.XgnFileInc ||
+                fileType == ParadoxFileType.YgnFile;
+
             ZeroRegion(header, ParadoxHeaderOffsets.RecordCount, 4);
             ZeroRegion(header, ParadoxHeaderOffsets.BlockChain, 8); // nextBlock+fileBlocks+firstBlock+lastBlock
             ZeroRegion(header, ParadoxHeaderOffsets.PxRootBlockId, 2);
@@ -414,6 +421,49 @@ namespace ParadoxReader
             // region is large enough to contain it.
             if (header.Length >= ParadoxHeaderOffsets.ChangeCount4 + 2)
                 ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount4, 2);
+
+            if (isSecondaryIndex)
+            {
+                // BDE/SQLRunner always creates a fresh secondary index (.Xnn/.Xgn/
+                // .Ynn/.Ygn) file with one pre-allocated (but empty) root block -
+                // the on-disk file is never just the bare header. Empirically
+                // confirmed against SQLRunner-created FRESHRBLD.XG0/.YG0: the
+                // block-chain fields (nextBlock/fileBlocks/firstBlock/lastBlock)
+                // are all 1, maxBlocks is 1, pxRootBlockId is the file's own
+                // block-numbering base (0 for XgnFile* types, 1 otherwise), and
+                // the block itself is the same "empty root" sentinel that
+                // SecondaryIndexFile.AllocateBlock/WriteBlock already reuses on
+                // the very first insert (see SecondaryIndexFile.OnBlockChanged).
+                // Cloning only the header (as done for .DB/.PX) leaves the
+                // rebuilt index 2048 bytes short of this and structurally
+                // incompatible with BDE, even though our own reader never
+                // required the extra block to function.
+                ushort blockBase = (fileType == ParadoxFileType.XgnFileNonInc || fileType == ParadoxFileType.XgnFileInc)
+                    ? (ushort)0 : (ushort)1;
+                int blockSize = header[ParadoxHeaderOffsets.MaxTableSize] * 0x400;
+
+                header[ParadoxHeaderOffsets.BlockChain] = 1;     // nextBlock
+                header[ParadoxHeaderOffsets.BlockChain + 2] = 1; // fileBlocks
+                header[ParadoxHeaderOffsets.BlockChain + 4] = 1; // firstBlock
+                header[ParadoxHeaderOffsets.BlockChain + 6] = 1; // lastBlock
+                Array.Copy(BitConverter.GetBytes(blockBase), 0, header, ParadoxHeaderOffsets.PxRootBlockId, 2);
+                Array.Copy(BitConverter.GetBytes((ushort)1), 0, header, ParadoxHeaderOffsets.MaxBlocks, 2);
+
+                var rootBlock = new byte[blockSize];
+                // Empty-root-block sentinel: leftChild=0, reserved=0,
+                // usedBytes=0xFFF8 (observed verbatim in SQLRunner-created
+                // empty secondary indexes; overwritten with real entry data
+                // by SecondaryIndexFile.WriteBlock on first insert).
+                rootBlock[4] = 0xF8;
+                rootBlock[5] = 0xFF;
+
+                using (var fs = new FileStream(destPath, FileMode.Create, FileAccess.Write))
+                {
+                    fs.Write(header, 0, header.Length);
+                    fs.Write(rootBlock, 0, rootBlock.Length);
+                }
+                return;
+            }
 
             File.WriteAllBytes(destPath, header);
         }

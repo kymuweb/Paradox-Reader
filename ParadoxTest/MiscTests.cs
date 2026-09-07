@@ -430,6 +430,109 @@ namespace ParadoxTest
             return values;
         }
 
+        // --------------------------------------------------------------------
+        // Fresh-table rebuild diagnostic: create a brand-new table via
+        // SQLRunner (real BDE), rebuild it with TableRebuilder, and compare
+        // against the untouched SQLRunner-created original. This isolates
+        // whether TableRebuilder itself corrupts an otherwise-known-good
+        // table, independent of any pre-existing corruption in a corpus
+        // table such as PatientBlobs. Run twice: once against an empty
+        // table (0 records) and once after inserting exactly 1 record, so
+        // the two runs bracket the smallest possible reproduction.
+        // --------------------------------------------------------------------
+
+        /// <summary>
+        /// Usage: ParadoxTest.exe freshrebuildtest [insertCount]
+        /// Creates FRESHRBLD.DB (AUTOINC PK + one SMALLINT secondary-indexed
+        /// column) via SQLRunner from scratch, optionally inserts
+        /// <paramref name="insertCount"/> row(s) via SQLRunner, snapshots the
+        /// pristine SQLRunner-created files, rebuilds a copy via
+        /// TableRebuilder.Rebuild, then compares rebuilt vs. pristine.
+        /// </summary>
+        public static void RunFreshRebuildTest(int insertCount)
+        {
+            if (!File.Exists(SqlRunnerExePath))
+            {
+                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunnerExePath);
+                return;
+            }
+
+            const string workDir = @"c:\temp\freshrebuildtest";
+            const string baseName = "FRESHRBLD";
+
+            Directory.CreateDirectory(workDir);
+            foreach (var f in Directory.GetFiles(workDir))
+            {
+                try { File.Delete(f); } catch { /* best effort */ }
+            }
+
+            string tablePath = Path.Combine(workDir, baseName + ".DB");
+
+            Console.WriteLine("=== [freshrebuildtest] Creating fresh table via SQLRunner ===");
+            RunDiagSqlRunner(workDir,
+                "CREATE TABLE '" + tablePath + "' (" +
+                "ID AUTOINC, " +
+                "SECVAL SMALLINT, " +
+                "PRIMARY KEY (ID))");
+            RunDiagSqlRunner(workDir, "CREATE INDEX SECIDX ON '" + tablePath + "' (SECVAL)");
+
+            if (!File.Exists(tablePath))
+            {
+                Console.WriteLine("[freshrebuildtest] SQLRunner did not produce {0}; aborting.", tablePath);
+                return;
+            }
+
+            for (int i = 1; i <= insertCount; i++)
+            {
+                RunDiagSqlRunner(workDir, "INSERT INTO '" + tablePath + "' (SECVAL) VALUES (" + i + ")");
+            }
+
+            int actualCount;
+            using (var t = new ParadoxTableFile(tablePath))
+                actualCount = t.Enumerate().Count();
+            Console.WriteLine("[freshrebuildtest] Pristine table has {0} record(s) (requested {1}).", actualCount, insertCount);
+
+            // Snapshot the pristine SQLRunner-created files before rebuilding,
+            // so the "before" state survives TableRebuilder's in-place swap.
+            const string pristineDirName = "pristine";
+            string pristineDir = Path.Combine(workDir, pristineDirName);
+            Directory.CreateDirectory(pristineDir);
+            foreach (var src in Directory.GetFiles(workDir, baseName + ".*"))
+            {
+                File.Copy(src, Path.Combine(pristineDir, baseName + "_pristine" + Path.GetExtension(src)), overwrite: true);
+            }
+
+            Console.WriteLine("=== [freshrebuildtest] Rebuilding via TableRebuilder ===");
+            var result = TableRebuilder.Rebuild(tablePath);
+            Console.WriteLine("[freshrebuildtest] Rebuild migrated {0} record(s).", result.RecordsMigrated);
+
+            string rebuiltDir = Path.Combine(workDir, "rebuilt");
+            Directory.CreateDirectory(rebuiltDir);
+            foreach (var src in Directory.GetFiles(workDir, baseName + ".*"))
+            {
+                File.Copy(src, Path.Combine(rebuiltDir, baseName + "_rebuilt" + Path.GetExtension(src)), overwrite: true);
+            }
+
+            Console.WriteLine("=== [freshrebuildtest] Verifying rebuilt table opens without IndexOutOfDate ===");
+            try
+            {
+                using (var t = new ParadoxTableFile(tablePath))
+                {
+                    Console.WriteLine("  IndexOutOfDate = {0}", t.IndexOutOfDate);
+                    int postCount = t.Enumerate().Count();
+                    Console.WriteLine("  Post-rebuild record count = {0}", postCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  [FAIL] Opening rebuilt table threw: {0}: {1}", ex.GetType().Name, ex.Message);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("=== [freshrebuildtest] Comparing pristine (SQLRunner) vs. rebuilt (TableRebuilder) ===");
+            RunCompareRebuildMode(pristineDir, baseName + "_pristine", rebuiltDir, baseName + "_rebuilt");
+        }
+
         private static string FieldValueToComparableString(object value)
         {
             switch (value)
@@ -810,6 +913,145 @@ namespace ParadoxTest
 
             Console.WriteLine();
             Console.WriteLine(anyDiff ? "Comparison complete: differences found (see above)." : "Comparison complete: all matched files are byte-identical.");
+        }
+
+        /// <summary>
+        /// Byte-compares two arbitrary table "families" (all files sharing a
+        /// base name, e.g. PatientBlobs_ourrebuild.DB/.MB/.PX/.XG0/.YG0) found
+        /// in two different directories (or the same directory, different
+        /// base names), matched purely by file extension. Intended for
+        /// re-running the historical "our rebuild vs. pdxrbld rebuild"
+        /// comparison, e.g.:
+        ///   ParadoxTest.exe comparerebuild c:\temp\paradoxtest PatientBlobs_ourrebuild PatientBlobs_pdxrbldrebuild
+        /// </summary>
+        public static void RunCompareRebuildMode(string dir, string baseNameA, string baseNameB)
+        {
+            RunCompareRebuildMode(dir, baseNameA, dir, baseNameB);
+        }
+
+        public static void RunCompareRebuildMode(string dirA, string baseNameA, string dirB, string baseNameB)
+        {
+            if (!Directory.Exists(dirA)) { Console.WriteLine("[comparerebuild] Directory not found: {0}", dirA); return; }
+            if (!Directory.Exists(dirB)) { Console.WriteLine("[comparerebuild] Directory not found: {0}", dirB); return; }
+
+            var aFiles = Directory.GetFiles(dirA, baseNameA + ".*")
+                .ToDictionary(f => Path.GetExtension(f).ToUpperInvariant(), f => f);
+            var bFiles = Directory.GetFiles(dirB, baseNameB + ".*")
+                .ToDictionary(f => Path.GetExtension(f).ToUpperInvariant(), f => f);
+
+            if (aFiles.Count == 0) { Console.WriteLine("[comparerebuild] No files found matching {0}.* in {1}", baseNameA, dirA); return; }
+            if (bFiles.Count == 0) { Console.WriteLine("[comparerebuild] No files found matching {0}.* in {1}", baseNameB, dirB); return; }
+
+            var allExts = aFiles.Keys.Union(bFiles.Keys).OrderBy(e => e, StringComparer.Ordinal).ToList();
+
+            bool anyDiff = false;
+            foreach (var ext in allExts)
+            {
+                if (!aFiles.TryGetValue(ext, out var aPath)) { Console.WriteLine("[{0}] MISSING on A side ({1})", ext, baseNameA); anyDiff = true; continue; }
+                if (!bFiles.TryGetValue(ext, out var bPath)) { Console.WriteLine("[{0}] MISSING on B side ({1})", ext, baseNameB); anyDiff = true; continue; }
+
+                if (CompareTwoTableFiles(ext, aPath, bPath))
+                    anyDiff = true;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine(anyDiff ? "Comparison complete: differences found (see above)." : "Comparison complete: all matched files are byte-identical.");
+        }
+
+        /// <summary>
+        /// Byte-compares a single pair of files (same logical extension,
+        /// e.g. both ".DB"), reporting size mismatch / byte-level diffs and,
+        /// for .DB files, a decoded DbHeaderSnapshot field diff. Shared by
+        /// CompareStepSnapshots and RunCompareRebuildMode. Returns true if
+        /// any difference was found.
+        /// </summary>
+        private static bool CompareTwoTableFiles(string label, string aPath, string bPath)
+        {
+            var aBytes = File.ReadAllBytes(aPath);
+            var bBytes = File.ReadAllBytes(bPath);
+            bool isDb = label.EndsWith(".DB", StringComparison.OrdinalIgnoreCase) ||
+                        Path.GetExtension(aPath).Equals(".DB", StringComparison.OrdinalIgnoreCase);
+
+            if (aBytes.Length != bBytes.Length)
+            {
+                Console.WriteLine("[{0}] SIZE MISMATCH: a={1} bytes ({2}), b={3} bytes ({4})", label, aBytes.Length, aPath, bBytes.Length, bPath);
+
+                if (isDb)
+                {
+                    try
+                    {
+                        var aHdr = DbHeaderSnapshot.Read(aPath);
+                        var bHdr = DbHeaderSnapshot.Read(bPath);
+                        foreach (var d in aHdr.DiffAgainst(bHdr))
+                            Console.WriteLine("    header diff: {0}", d);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("    [warn] could not decode headers: {0}", ex.Message);
+                    }
+                }
+                return true;
+            }
+
+            var diffOffsets = new List<int>();
+            for (int i = 0; i < aBytes.Length; i++)
+            {
+                if (aBytes[i] != bBytes[i]) diffOffsets.Add(i);
+            }
+
+            if (diffOffsets.Count == 0)
+            {
+                Console.WriteLine("[{0}] MATCH ({1} bytes)", label, aBytes.Length);
+                return false;
+            }
+
+            // Some header bytes are known to hold raw in-memory pointer
+            // values from whichever process last wrote the file, not
+            // persisted table state, so they are expected to differ between
+            // engines even when the actual table state is identical:
+            // unknown12x13 (0x12-0x13), unknownPtr1A/pointer (0x1A-0x1D),
+            // tableNamePtrPtr (0x30-0x33), fldInfoPtr (0x34-0x37).
+            bool IsKnownVolatile(int offset) =>
+                (offset >= 0x12 && offset <= 0x13) ||
+                (offset >= 0x1A && offset <= 0x1D) ||
+                (offset >= 0x30 && offset <= 0x33) ||
+                (offset >= 0x34 && offset <= 0x37);
+
+            var meaningfulOffsets = isDb
+                ? diffOffsets.Where(o => !IsKnownVolatile(o)).ToList()
+                : diffOffsets;
+
+            var first = diffOffsets.Take(10).Select(o => $"0x{o:X} (a={aBytes[o]:X2} b={bBytes[o]:X2})");
+            Console.WriteLine("[{0}] DIFF: {1} byte(s) differ ({2} after filtering known-volatile pointer bytes). First offsets: {3}{4}",
+                label, diffOffsets.Count, meaningfulOffsets.Count, string.Join(", ", first.ToArray()), diffOffsets.Count > 10 ? ", ..." : "");
+
+            if (meaningfulOffsets.Count > 0 && meaningfulOffsets.Count != diffOffsets.Count)
+            {
+                var firstMeaningful = meaningfulOffsets.Take(10).Select(o => $"0x{o:X} (a={aBytes[o]:X2} b={bBytes[o]:X2})");
+                Console.WriteLine("    meaningful (non-pointer) offsets: {0}{1}",
+                    string.Join(", ", firstMeaningful.ToArray()), meaningfulOffsets.Count > 10 ? ", ..." : "");
+            }
+
+            if (isDb)
+            {
+                try
+                {
+                    var aHdr = DbHeaderSnapshot.Read(aPath);
+                    var bHdr = DbHeaderSnapshot.Read(bPath);
+                    var headerDiffs = aHdr.DiffAgainst(bHdr).ToList();
+                    if (headerDiffs.Count == 0)
+                        Console.WriteLine("    header fields match; diff is confined to record/data area.");
+                    else
+                        foreach (var d in headerDiffs)
+                            Console.WriteLine("    header diff: {0}", d);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("    [warn] could not decode headers: {0}", ex.Message);
+                }
+            }
+
+            return true;
         }
 
         // --------------------------------------------------------------------

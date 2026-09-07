@@ -204,7 +204,18 @@ namespace ParadoxReader
 
             if (indexFile.stream.Length <= indexFile.headerSize || indexFile.RecordCount <= 0)
             {
-                var newLeaf = AllocateBlock();
+                // A freshly rebuilt/created skeleton (see TableRebuilder /
+                // ParadoxHeaderBuilder) already has one empty root block
+                // pre-allocated (matching BDE/SQLRunner's on-disk layout, which
+                // never omits it even for a brand-new empty index), so on the
+                // very first insert into such a file we must reuse that
+                // existing block rather than calling AllocateBlock() and
+                // appending a second one (which would leave a dangling,
+                // never-referenced empty block at the end of the file and
+                // grow it past BDE's expected size).
+                PxBlock newLeaf = indexFile.stream.Length > indexFile.headerSize
+                    ? new PxBlock { BlockNumber = blockBase, Capacity = blockCapacity }
+                    : AllocateBlock();
                 newLeaf.Entries.Add(new PxEntry(keyData, dbBlockNumber, (ushort)recordCount));
                 WriteBlock(newLeaf);
                 UpdateRootBlockId(newLeaf.BlockNumber);

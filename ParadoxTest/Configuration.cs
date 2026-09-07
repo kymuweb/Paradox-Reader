@@ -86,5 +86,24 @@ namespace ParadoxTest
                 return string.Empty;
             }
         }
+
+        // Machine-specific; the BDE "Pdxrbld" (Paradox table rebuild) utility,
+        // used as the known-good reference implementation to compare
+        // ParadoxReader.TableRebuilder's output against. Configured via
+        // appSettings key "PdxrbldExePath", normally set in
+        // ParadoxTest\SqlRunner.local.config (git-ignored - see
+        // SqlRunner.local.config.example). Falls back to string.Empty when
+        // unset/missing.
+        internal static string GetPdxrbldExePath()
+        {
+            try
+            {
+                return System.Configuration.ConfigurationManager.AppSettings["PdxrbldExePath"] ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
     }
 }
