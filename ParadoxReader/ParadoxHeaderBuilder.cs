@@ -261,28 +261,42 @@ namespace ParadoxReader
                 // .PX (primary index) files specifically - confirmed via
                 // binary-patch experimentation against a real
                 // BDE/SQLRunner-created PKONLY.PX fixture: leaving this at 0
-                // (our previous value) makes BDE intermittently fail to read
-                // the table (AccessViolationException), while patching it
-                // to 102 (0x66) fixes it. Matches pxlibcpp's put_px_head(),
-                // which stamps unknown2Bx2C[1]=102 unconditionally for
-                // pxfFileTypPrimIndex.
+                // (our previous value) makes BDE fail to read the table
+                // (SQLRunner's "select count(*)" oracle fails / crashes).
+                // pxlibcpp's put_px_head() claims unknown2Bx2C[1]=102
+                // (0x66) unconditionally for pxfFileTypPrimIndex, but direct
+                // binary-patch testing against a real SQLRunner/BDE-created
+                // PKONLY.PX fixture disproves that: 102 still fails the
+                // oracle, while the real fixture's actual byte value 171
+                // (0xAB) is the value that passes. 0xAB is consistent across
+                // every real SQLRunner-created .PX fixture in
+                // ParadoxTest\data regardless of field count/type (verified
+                // across AUTOALPB, AUTOALPI, AUTOALPM, PKALPBLO, PKALPHA,
+                // PKALPHID, PKALPMEM, PKONLY), so it appears to be a fixed
+                // stamp rather than content-derived.
                 w.Write((byte)0);                                          // 0x2B unknown2Bx2C[0]
-                w.Write((byte)(fileType == ParadoxFileType.PxFile ? 102 : 0)); // 0x2C unknown2Bx2C[1]
+                w.Write((byte)(fileType == ParadoxFileType.PxFile ? 0xAB : 0)); // 0x2C unknown2Bx2C[1]
                 // changeCount1/changeCount2 (0x2D/0x2E): CRITICAL, load-bearing
                 // fields for .DB files specifically - confirmed via
                 // binary-patch experimentation against a real BDE/SQLRunner
                 // -created PKONLY.DB (indexed) fixture: zeroing these two
-                // bytes causes the BDE engine to intermittently crash with
-                // an AccessViolationException on read. pxlibcpp's
-                // put_px_head() stamps changeCount1=2, changeCount2=1
-                // unconditionally for pxfFileTypIndexDB/pxfFileTypNonIndexDB
-                // (with a comment noting "set this to at least two until
-                // pxindex changes the header itself"), so this is a genuine
-                // structural requirement of .DB files, not a reserved/unused
-                // pointer field.
+                // bytes causes the BDE engine to fail the SQLRunner count(*)
+                // oracle. pxlibcpp's put_px_head() claims changeCount1=2,
+                // changeCount2=1 unconditionally for
+                // pxfFileTypIndexDB/pxfFileTypNonIndexDB, but direct
+                // binary-patch testing against a real SQLRunner-created
+                // fixture disproves that: 2/1 still fails the oracle, while
+                // the real fixture's actual byte values 0x5D/0x5B are what
+                // passes. These exact values (0x5D, 0x5B) are identical
+                // across every real SQLRunner-created .DB fixture in
+                // ParadoxTest\data regardless of field count/table
+                // name/content (verified across AUTOALPB, AUTOALPI,
+                // AUTOALPM, NOIDX, PKALPBLO, PKALPHA, PKALPHID, PKALPMEM,
+                // PKONLY), so - like unknown2Bx2C[1] on .PX files - this
+                // appears to be a fixed stamp rather than content-derived.
                 bool isDbFile = fileType == ParadoxFileType.DbFileIndexed || fileType == ParadoxFileType.DbFileNotIndexed;
-                w.Write((byte)(isDbFile ? 2 : 0));   // 0x2D changeCount1
-                w.Write((byte)(isDbFile ? 1 : 0));   // 0x2E changeCount2
+                w.Write((byte)(isDbFile ? 0x5D : 0));   // 0x2D changeCount1
+                w.Write((byte)(isDbFile ? 0x5B : 0));   // 0x2E changeCount2
                 w.Write((byte)0);                    // 0x2F unknown2F
                 w.Write(0);                          // 0x30 tableNamePtrPtr
                 w.Write(0);                          // 0x34 fldInfoPtr
@@ -405,6 +419,26 @@ namespace ParadoxReader
                         w.Write(fieldNameBytes);
                         w.Write((byte)0);
                     }
+
+                    // fieldNumbers array (one 1-based uint16 per field) +
+                    // sortOrderID (8-byte ASCII language-driver identifier).
+                    // Real BDE-created .DB files always write these two
+                    // sections immediately after the field names - confirmed
+                    // empirically against a real SQLRunner/BDE-created
+                    // PKONLY.DB fixture (bytes 0xD4-0xDD == 01 00 44 42 57 49
+                    // 4E 55 53 30, i.e. fieldNumber=1 followed by ASCII
+                    // "DBWINUS0"), and mirrored by pxlibcpp's put_px_head()
+                    // (which writes the analogous fieldNumbers + an 8-byte
+                    // sortOrderID string for non-index files). Only present
+                    // for .DB files (includeFieldNames == true); .PX/.XGn/
+                    // .YGn files never write this section (isindex == true
+                    // in pxlibcpp).
+                    for (int i = 0; i < fieldCount; i++)
+                        w.Write((ushort)(i + 1));
+
+                    var sortOrderIdBytes = Encoding.ASCII.GetBytes("DBWINUS0");
+                    w.Write(sortOrderIdBytes);
+                    w.Write((byte)0); // trailing null (accounted for by the realHeaderSize "+9" above)
                 }
 
                 w.Flush();
