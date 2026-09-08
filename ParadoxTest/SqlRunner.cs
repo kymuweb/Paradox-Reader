@@ -72,7 +72,7 @@ namespace ParadoxTest
                 return false;
             }
 
-            var result = Execute("select count(*) from '" + dbPath + "'", preStdinDelayMs: preStdinDelayMs, timeoutMs: timeoutMs);
+            var result = Execute("select count(*) from '" + dbPath + "'", lockFileFolder: Path.GetDirectoryName(dbPath), preStdinDelayMs: preStdinDelayMs, timeoutMs: timeoutMs);
             string stdout = result.Stdout;
             string stderr = result.Stderr;
 

@@ -268,16 +268,35 @@ namespace ParadoxReader
                 w.Write(0);                          // 0x49 autoIncVal
                 w.Write(new byte[2]);                 // 0x4D-0x4E unknown4Dx4E
                 w.Write((byte)0);                    // 0x4F indexUpdateRequired
-                // 0x50-0x54: reserved/pointer-like bytes - values observed in
-                // static ParadoxTest\data fixtures are not stable across
-                // separately-created SQLRunner tables (confirmed: PKONLY.DB
-                // created fresh here has 0xFC at 0x51, vs 0xC6 in the
-                // committed fixtures), so these are almost certainly
-                // in-memory pointers/timestamps from the original creating
-                // process rather than fixed structural content. Left as
-                // zero, matching this library's existing "reserved fields
-                // are never dereferenced" convention.
-                w.Write(new byte[5]);                 // 0x50-0x54 unknown50x54
+                // 0x50: unknown/reserved - left zero (no stable pattern
+                // observed across fixtures).
+                w.Write((byte)0);                    // 0x50 unknown50
+                // 0x51-0x52 (realHeaderSize, uint16): CRITICAL, load-bearing
+                // field - confirmed via binary-patch experimentation against
+                // a real BDE/SQLRunner-created NOIDX.DB: zeroing this field
+                // on an otherwise-valid file makes the BDE engine crash with
+                // an AccessViolationException on read (SQLRunner's
+                // "select count(*)"), while restoring the correct value
+                // fixes it. This mirrors pxlibcpp's put_px_head(), which
+                // computes it as:
+                //   dataheadoffset + numfields*(2+4+2) + 4 + tablenamelen
+                //     + sumfieldlen + 9      (all types except .PX)
+                //   dataheadoffset + numfields*2 + 4 + tablenamelen
+                //     (.PX only)
+                // where dataheadoffset is 0x78 when a V4 header is present,
+                // else 0x58, and sumfieldlen is the sum of each field's
+                // (name length + 1), or 1 per field when field names are not
+                // written (matching pxlib's NULL-fname fallback).
+                int dataHeadOffset = hasV4Header ? 0x78 : 0x58;
+                int sumFieldLen = includeFieldNames
+                    ? fields.Sum(f => Encoding.ASCII.GetByteCount(f.Name ?? string.Empty) + 1)
+                    : fieldCount;
+                int realHeaderSize = fileType == ParadoxFileType.PxFile
+                    ? dataHeadOffset + fieldCount * 2 + 4 + nameFieldLength
+                    : dataHeadOffset + fieldCount * (2 + 4 + 2) + 4 + nameFieldLength + sumFieldLen + 9;
+                w.Write((ushort)realHeaderSize);     // 0x51-0x52 realHeaderSize
+                w.Write((byte)0);                    // 0x53-0x54 unknown53x54 (only 1 byte remains here; see below)
+                w.Write((byte)0);                    // pad to keep total 0x50-0x54 span at 5 bytes
                 w.Write((byte)0);                    // 0x55 refIntegrity
                 // 0x56-0x57: real BDE .DB/.Xnn/.XGn files always have 0x0020
                 // here; .PX/.YGn files always have 0x0000 (confirmed across
@@ -305,7 +324,20 @@ namespace ParadoxReader
                     w.Write((ushort)0);  // hiFieldIDinfo
                     w.Write((short)0);   // sometimesNumFields
                     w.Write((ushort)1252);  // dosCodePage
-                    w.Write(new byte[4]); // unknown6Cx6F
+                    // unknown6Cx6F[0..1] - real BDE/pxlib DB writers always
+                    // stamp these two bytes as 0x01, 0x01 for .DB files (both
+                    // indexed and non-indexed) - confirmed both by pxlibcpp's
+                    // put_px_head() (unknown6Cx6F[0]=1, [1]=1 for
+                    // pxfFileTypIndexDB/pxfFileTypNonIndexDB) and empirically
+                    // against a real SQLRunner/BDE-created NOIDX.DB fixture
+                    // (bytes 0x6C-0x6D == 01 01, vs our previous 00 00).
+                    // Leaving these zero is a deterministic mismatch from
+                    // every real DB-type file, unlike the surrounding pointer
+                    // fields (0x60-0x66, 0x7A-0x89, etc) which are per-process
+                    // memory addresses/timestamps and not stable across runs.
+                    w.Write((byte)0x01); // unknown6Cx6F[0]
+                    w.Write((byte)0x01); // unknown6Cx6F[1]
+                    w.Write(new byte[2]); // unknown6Cx6F[2..3]
                     w.Write((short)0);   // changeCount4
                     w.Write(new byte[6]); // unknown72x77
                 }
