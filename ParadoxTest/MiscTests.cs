@@ -71,7 +71,6 @@ namespace ParadoxTest
         // it's never committed. SQLRunner is used to independently verify
         // (via SELECT) that writes performed by ParadoxReader are visible
         // to BDE, and to run Pdxrbld-equivalent consistency checks.
-        private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
 
         // Paradox/BDE has historical issues with long paths and permissions on
         // some folders (Program Files, deeply nested repo paths, etc.), so all
@@ -126,8 +125,8 @@ namespace ParadoxTest
         public static void EnsureCleanState()
         {
             Directory.CreateDirectory(TestFolder);
-            EnsureNoSqlRunnerProcessesRunning();
-            DeleteStaleLockFilesWithRetry();
+            SqlRunner.EnsureNoStrayProcesses();
+            SqlRunner.DeleteLockFiles(TestFolder);
         }
 
         private static void RunStandardTestSuite()
@@ -451,9 +450,9 @@ namespace ParadoxTest
         /// </summary>
         public static void RunFreshRebuildTest(int insertCount)
         {
-            if (!File.Exists(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
-                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunnerExePath);
+                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunner.ExePath);
                 return;
             }
 
@@ -593,9 +592,9 @@ namespace ParadoxTest
         /// </summary>
         private static void RunSqlRunnerOnlyMode()
         {
-            if (!File.Exists(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
-                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunnerExePath);
+                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunner.ExePath);
                 return;
             }
 
@@ -1069,7 +1068,7 @@ namespace ParadoxTest
 
             // Clear stale *.LCK files left behind by a prior SQLRunner/BDE
             // session (e.g. PDOXUSRS.LCK) before touching anything else.
-            DeleteStaleLockFiles();
+            SqlRunner.DeleteLockFiles(TestFolder);
 
             // Delete individual table/index/blob files rather than the whole
             // directory: BDE (via SQLRunner) leaves behind a PDOXUSRS.LCK
@@ -1477,9 +1476,9 @@ namespace ParadoxTest
         /// </summary>
         private static void TestVerifyWithSqlRunner()
         {
-            if (!File.Exists(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
-                Console.WriteLine("SQLRunner not found at {0}; skipping BDE verification.", SqlRunnerExePath);
+                Console.WriteLine("SQLRunner not found at {0}; skipping BDE verification.", SqlRunner.ExePath);
                 return;
             }
 
@@ -1759,73 +1758,10 @@ namespace ParadoxTest
         }
 
         /// <summary>
-        /// Minimal, self-contained SQLRunner invocation for xg0diag mode
-        /// (mirrors CorpusTest.RunSqlRunner).
+        /// Minimal, self-contained SQLRunner invocation for xg0diag mode.
+        /// Delegates to the consolidated <see cref="SqlRunner"/> helper.
         /// </summary>
-        private static void RunDiagSqlRunner(string workDir, string sql)
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName               = SqlRunnerExePath,
-                Arguments              = $"/S \"{sql}\"",
-                UseShellExecute        = false,
-                RedirectStandardInput  = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            using (var process = new Process { StartInfo = psi })
-            {
-                // Drain stdout/stderr asynchronously - SQLRunner can write enough
-                // output to fill the redirected pipe buffer, which would otherwise
-                // deadlock the process (and cause WaitForExit to time out and get
-                // killed before it finishes/flushes the operation to disk).
-                process.OutputDataReceived += (s, e) => { };
-                process.ErrorDataReceived  += (s, e) => { };
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited */ }
-
-                if (!process.WaitForExit(10000))
-                {
-                    try
-                    {
-                        using (var killer = new Process())
-                        {
-                            killer.StartInfo = new ProcessStartInfo
-                            {
-                                FileName        = "taskkill",
-                                Arguments       = $"/PID {process.Id} /T /F",
-                                UseShellExecute = false,
-                                CreateNoWindow  = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError  = true
-                            };
-                            killer.Start();
-                            killer.WaitForExit(5000);
-                        }
-                    }
-                    catch { /* best effort */ }
-                    try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                }
-            }
-
-            System.Threading.Thread.Sleep(300);
-
-            foreach (var lockFile in Directory.GetFiles(workDir, "*.LCK"))
-            {
-                try { File.Delete(lockFile); } catch { /* best effort */ }
-            }
-        }
+        private static void RunDiagSqlRunner(string workDir, string sql) => SqlRunner.Execute(sql, workDir);
 
         // --------------------------------------------------------------------
         // Diagnostic mode: grow the .PX primary index past a single level
@@ -1905,209 +1841,6 @@ namespace ParadoxTest
             }
         }
 
-        private static void RunSqlRunner(string sql)
-        {
-            Console.WriteLine("SQLRunner> {0}", sql);
-
-            // Guarantee a clean starting state before every single invocation:
-            // kill any lingering SQLRunner process (a prior call may have
-            // hung and been force-killed, or a stray instance may still be
-            // shutting down) and remove all *.LCK files, then verify both
-            // are actually gone before we start a new process. Without this,
-            // multiple SQLRunner instances can pile up concurrently and
-            // fight over the same locks, which is its own source of hangs.
-            EnsureNoSqlRunnerProcessesRunning();
-            DeleteStaleLockFilesWithRetry();
-
-            var remainingLocks = Directory.GetFiles(TestFolder, "*.LCK");
-            if (remainingLocks.Length > 0)
-            {
-                Console.WriteLine("  [warn] {0} lock file(s) still present before launch: {1}",
-                    remainingLocks.Length, string.Join(", ", remainingLocks.Select(Path.GetFileName).ToArray()));
-            }
-
-            var psi = new ProcessStartInfo
-            {
-                FileName               = SqlRunnerExePath,
-                Arguments              = $"/S \"{sql}\"",
-                UseShellExecute        = false,
-                RedirectStandardInput  = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            var stdoutBuilder = new System.Text.StringBuilder();
-            var stderrBuilder = new System.Text.StringBuilder();
-
-            using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
-            {
-                process.OutputDataReceived += (s, e) => { if (e.Data != null) stdoutBuilder.AppendLine(e.Data); };
-                process.ErrorDataReceived  += (s, e) => { if (e.Data != null) stderrBuilder.AppendLine(e.Data); };
-
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                // SQLRunner's /S flag appears to suppress the confirmation
-                // prompt only for INSERT; UPDATE/DELETE still print
-                // "Please ensure you have a Backup." and then wait on stdin
-                // for an ENTER keypress before proceeding, which our
-                // redirected (non-interactive) stdin never provides. Feed a
-                // single newline proactively so it doesn't block waiting for
-                // input that will never come.
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited or not be waiting on stdin */ }
-
-                // Per user instruction: treat SQLRunner as locked-up if it
-                // hasn't exited within ~10 seconds, rather than waiting 30s.
-                // This is our hang detector - a real "problem state", not a
-                // slow-but-working call.
-                if (!process.WaitForExit(10000))
-                {
-                    Console.WriteLine("  [warn] SQLRunner did not exit within 10s; treating as HUNG. Killing process.");
-                    KillProcessTree(process);
-                    process.WaitForExit();
-                }
-
-                string stdout = stdoutBuilder.ToString();
-                string stderr = stderrBuilder.ToString();
-
-                if (!string.IsNullOrWhiteSpace(stdout))
-                    Console.WriteLine(stdout.Trim());
-                if (!string.IsNullOrWhiteSpace(stderr))
-                    Console.WriteLine("  [stderr] " + stderr.Trim());
-            }
-
-            // BDE can hold onto its file handles / PDOXUSRS.LCK briefly after
-            // the SQLRunner process itself has exited (e.g. while its BDE
-            // session/engine shuts down). Give it a moment before we attempt
-            // to touch the table or its lock files again, otherwise a
-            // following ParadoxTableFile open (or another SQLRunner call)
-            // can race BDE's own cleanup and see a "table is busy" state.
-            System.Threading.Thread.Sleep(500);
-
-            // Clean up any lock file SQLRunner itself left behind, so the next
-            // invocation (or a subsequent ParadoxTableFile open) doesn't see a
-            // stale lock. Retry with backoff since BDE may still be releasing
-            // the handle for a short time after the process exits.
-            DeleteStaleLockFilesWithRetry();
-        }
-
-        /// <summary>
-        /// Deletes any *.LCK files in the test folder, retrying briefly if a
-        /// file is still in use (BDE can hold the handle open for a short
-        /// time after SQLRunner's process has exited).
-        /// </summary>
-        private static void DeleteStaleLockFilesWithRetry(int maxAttempts = 5, int delayMs = 250)
-        {
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                var remaining = Directory.GetFiles(TestFolder, "*.LCK");
-                if (remaining.Length == 0) return;
-
-                bool anyFailed = false;
-                foreach (var lockFile in remaining)
-                {
-                    try { File.Delete(lockFile); }
-                    catch (Exception ex)
-                    {
-                        anyFailed = true;
-                        if (attempt == maxAttempts)
-                            Console.WriteLine("  [warn] Could not delete {0} after {1} attempts: {2}", lockFile, maxAttempts, ex.Message);
-                    }
-                }
-
-                if (!anyFailed) return;
-                System.Threading.Thread.Sleep(delayMs);
-            }
-        }
-
-
-        /// <summary>
-        /// Deletes any *.LCK files in the test folder. Safe to call before/after
-        /// SQLRunner runs, provided no SQLRunner (or ParadoxTableFile) process
-        /// is currently using the table concurrently.
-        /// </summary>
-        private static void DeleteStaleLockFiles()
-        {
-            foreach (var lockFile in Directory.GetFiles(TestFolder, "*.LCK"))
-            {
-                try { File.Delete(lockFile); }
-                catch (Exception ex) { Console.WriteLine("  [warn] Could not delete {0}: {1}", lockFile, ex.Message); }
-            }
-        }
-
-        /// <summary>
-        /// Guarantees no SQLRunner process is left running before we launch a
-        /// new one. A previous invocation that hung and was force-killed can,
-        /// in rare cases, leave a still-shutting-down instance behind (or a
-        /// completely separate stray instance from an earlier crashed run of
-        /// this harness). Running multiple SQLRunner/BDE instances
-        /// concurrently against the same table is itself a reliable way to
-        /// cause locking problems, so this must be checked/cleared before
-        /// every single RunSqlRunner call, not just once at startup.
-        /// </summary>
-        private static void EnsureNoSqlRunnerProcessesRunning()
-        {
-            var exeName = Path.GetFileNameWithoutExtension(SqlRunnerExePath);
-            var stray = Process.GetProcessesByName(exeName);
-            if (stray.Length == 0) return;
-
-            Console.WriteLine("  [warn] {0} stray SQLRunner process(es) found before launch (PIDs: {1}); killing.",
-                stray.Length, string.Join(", ", stray.Select(p => p.Id.ToString()).ToArray()));
-
-            foreach (var p in stray)
-            {
-                try { KillProcessTree(p); }
-                catch (Exception ex) { Console.WriteLine("  [warn] Failed to kill PID {0}: {1}", p.Id, ex.Message); }
-                finally { p.Dispose(); }
-            }
-
-            // Give the OS a moment to fully tear down the killed process(es)
-            // before we go on to check/delete lock files.
-            System.Threading.Thread.Sleep(500);
-
-            var stillRunning = Process.GetProcessesByName(exeName);
-            if (stillRunning.Length > 0)
-            {
-                Console.WriteLine("  [warn] {0} SQLRunner process(es) still running after kill attempt (PIDs: {1}).",
-                    stillRunning.Length, string.Join(", ", stillRunning.Select(p => p.Id.ToString()).ToArray()));
-                foreach (var p in stillRunning) p.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Kills a process and any child processes it may have spawned
-        /// (taskkill /T), rather than relying on Process.Kill() alone, which
-        /// only kills the immediate process and can leave children running.
-        /// </summary>
-        private static void KillProcessTree(Process process)
-        {
-            try
-            {
-                using (var killer = new Process())
-                {
-                    killer.StartInfo = new ProcessStartInfo
-                    {
-                        FileName        = "taskkill",
-                        Arguments       = $"/PID {process.Id} /T /F",
-                        UseShellExecute = false,
-                        CreateNoWindow  = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError  = true
-                    };
-                    killer.Start();
-                    killer.WaitForExit(5000);
-                }
-            }
-            catch { /* fall back to direct kill below */ }
-
-            try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-        }
+        private static void RunSqlRunner(string sql) => SqlRunner.Execute(sql, TestFolder);
     }
 }

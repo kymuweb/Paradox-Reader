@@ -35,10 +35,6 @@ namespace ParadoxTest
     {
         private const string WorkRoot = @"c:\temp\corpustest";
 
-        // Machine-specific; sourced from app.config's appSettings (via
-        // SqlRunner.local.config, git-ignored) rather than hard-coded.
-        private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
-
         private enum TableOutcome { Pass, Fail, Error, Skip }
 
         private class TableResult
@@ -83,10 +79,10 @@ namespace ParadoxTest
                 return;
             }
 
-            bool haveSqlRunner = File.Exists(SqlRunnerExePath);
+            bool haveSqlRunner = SqlRunner.IsAvailable;
             if (!haveSqlRunner)
             {
-                Console.WriteLine("[corpustest] [warn] SQLRunner not found at {0}; SQLRunner-side comparison will be skipped for every table.", SqlRunnerExePath);
+                Console.WriteLine("[corpustest] [warn] SQLRunner not found at {0}; SQLRunner-side comparison will be skipped for every table.", SqlRunner.ExePath);
             }
 
             Directory.CreateDirectory(WorkRoot);
@@ -743,66 +739,10 @@ namespace ParadoxTest
 
         /// <summary>
         /// Minimal, self-contained SQLRunner invocation for the corpus test
-        /// mode (deliberately separate from Program.RunSqlRunner, which is
+        /// mode (deliberately separate from MiscTests' RunSqlRunner, which is
         /// scoped to the single-table TESTTAB harness/TestFolder constant).
-        /// Applies the same hang-detection/timeout tolerance since SQLRunner
-        /// can wait on stdin for UPDATE/DELETE confirmation prompts.
+        /// Delegates to the consolidated <see cref="SqlRunner"/> helper.
         /// </summary>
-        private static void RunSqlRunner(string workDir, string sql)
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName               = SqlRunnerExePath,
-                Arguments              = $"/S \"{sql}\"",
-                UseShellExecute        = false,
-                RedirectStandardInput  = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            using (var process = new Process { StartInfo = psi })
-            {
-                process.Start();
-
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited */ }
-
-                if (!process.WaitForExit(10000))
-                {
-                    try
-                    {
-                        using (var killer = new Process())
-                        {
-                            killer.StartInfo = new ProcessStartInfo
-                            {
-                                FileName        = "taskkill",
-                                Arguments       = $"/PID {process.Id} /T /F",
-                                UseShellExecute = false,
-                                CreateNoWindow  = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError  = true
-                            };
-                            killer.Start();
-                            killer.WaitForExit(5000);
-                        }
-                    }
-                    catch { /* best effort */ }
-                    try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                }
-            }
-
-            System.Threading.Thread.Sleep(300);
-
-            foreach (var lockFile in Directory.GetFiles(workDir, "*.LCK"))
-            {
-                try { File.Delete(lockFile); } catch { /* best effort */ }
-            }
-        }
+        private static void RunSqlRunner(string workDir, string sql) => SqlRunner.Execute(sql, workDir);
     }
 }

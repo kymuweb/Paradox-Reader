@@ -17,6 +17,9 @@ namespace ParadoxTest
     {
         static void Main(string[] args)
         {
+
+            args = new string[] { "createtabletest" };
+
             if (args.Length > 0 && args[0] == "libupdatetest")
             {
                 MiscTests.RunLibUpdateTest();
@@ -187,6 +190,23 @@ namespace ParadoxTest
                 // to investigate whether our creation logic matches BDE's
                 // "from scratch" byte layout.
                 HeaderCompareTest.Run();
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "createtabletest")
+            {
+                // Usage: ParadoxTest.exe createtabletest
+                // For each schema shape in HeaderCompareTest.BuildCases(),
+                // creates the table via ParadoxReader's TableCreator and via
+                // SQLRunner (real BDE CREATE TABLE/CREATE INDEX), does a full
+                // byte comparison of every created file while both are still
+                // blank, then inserts one equivalent record into BOTH sides
+                // using ParadoxTableFile.InsertRecord (deliberately not
+                // SQLRunner INSERT, to isolate create-time differences and
+                // because SQLRunner may be unable to insert into a
+                // corrupt/incompatible table our creation logic produced),
+                // and repeats the full byte comparison.
+                CreateTableCompareTest.Run();
                 return;
             }
 

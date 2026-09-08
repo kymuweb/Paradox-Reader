@@ -35,7 +35,6 @@ namespace ParadoxTest
     internal static class HeaderCompareTest
     {
         private const string RootDir = @"c:\temp\headercompare";
-        private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
 
         internal class CaseDefinition
         {
@@ -56,7 +55,7 @@ namespace ParadoxTest
 
         public static void Run()
         {
-            if (string.IsNullOrEmpty(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
                 Console.WriteLine("[headercomparetest] SqlRunnerExePath not configured; aborting.");
                 return;
@@ -508,58 +507,6 @@ namespace ParadoxTest
             }
         }
 
-        private static void RunSqlRunner(string sql)
-        {
-            Console.WriteLine("SQLRunner> {0}", sql);
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = SqlRunnerExePath,
-                Arguments = "/S \"" + sql + "\"",
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using (var process = new Process { StartInfo = psi })
-            {
-                process.Start();
-
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited */ }
-
-                if (!process.WaitForExit(10000))
-                {
-                    try
-                    {
-                        using (var killer = new Process())
-                        {
-                            killer.StartInfo = new ProcessStartInfo
-                            {
-                                FileName = "taskkill",
-                                Arguments = "/PID " + process.Id + " /T /F",
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true
-                            };
-                            killer.Start();
-                            killer.WaitForExit(5000);
-                        }
-                    }
-                    catch { /* best effort */ }
-                    try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                }
-            }
-
-            System.Threading.Thread.Sleep(300);
-        }
+        private static void RunSqlRunner(string sql) => SqlRunner.Execute(sql);
     }
 }

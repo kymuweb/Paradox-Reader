@@ -45,18 +45,16 @@ namespace ParadoxTest
     internal static class RebuildCompareTest
     {
         private const string RootDir = @"c:\temp\rebuildcompare";
-        private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
-        private static string PdxrbldExePath => Configuration.GetPdxrbldExePath();
 
         public static void Run()
         {
-            if (string.IsNullOrEmpty(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
                 Console.WriteLine("[rebuildcomparetest] SqlRunnerExePath not configured; aborting.");
                 return;
             }
 
-            bool pdxrbldAvailable = !string.IsNullOrEmpty(PdxrbldExePath) && File.Exists(PdxrbldExePath);
+            bool pdxrbldAvailable = Pdxrbld.IsAvailable;
             if (!pdxrbldAvailable)
             {
                 Console.WriteLine("[rebuildcomparetest] PdxrbldExePath not configured/found; pdxrbld_* datasets will be skipped.");
@@ -244,7 +242,7 @@ namespace ParadoxTest
         /// </summary>
         public static void CheckCount(string dbPath, int expectedRecordCount)
         {
-            if (string.IsNullOrEmpty(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
                 Console.WriteLine("[checkrebuildcount] SqlRunnerExePath not configured; aborting.");
                 return;
@@ -282,60 +280,7 @@ namespace ParadoxTest
         /// for a "no errors found" entry for this table, appended after this
         /// invocation started.
         /// </summary>
-        private static bool RunPdxrbld(string tableDir, string tableFileName)
-        {
-            string logPath = Path.Combine(Path.GetDirectoryName(PdxrbldExePath) ?? string.Empty, "Pdxrbld.LOG");
-            long logLengthBefore = File.Exists(logPath) ? new FileInfo(logPath).Length : 0;
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = PdxrbldExePath,
-                Arguments = string.Format("\"/F{0}\" \"/T{1}\" -R2 -P+ -L+ -Q+", tableDir, tableFileName),
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            Console.WriteLine("Pdxrbld> {0}", psi.Arguments);
-
-            using (var process = new Process { StartInfo = psi })
-            {
-                process.Start();
-                if (!process.WaitForExit(15000))
-                {
-                    Console.WriteLine("  [warn] Pdxrbld did not exit within 15s; treating as HUNG. Killing process.");
-                    try { process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                    return false;
-                }
-            }
-
-            if (!File.Exists(logPath))
-            {
-                Console.WriteLine("  [warn] Pdxrbld.LOG not found at {0}; cannot confirm result.", logPath);
-                return false;
-            }
-
-            string newLogText;
-            using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            {
-                fs.Position = Math.Min(logLengthBefore, fs.Length);
-                using (var r = new StreamReader(fs))
-                    newLogText = r.ReadToEnd();
-            }
-
-            Console.WriteLine(newLogText.Trim());
-
-            string baseNameNoExt = Path.GetFileNameWithoutExtension(tableFileName).ToUpperInvariant();
-            bool noErrors = newLogText.ToUpperInvariant().Contains(baseNameNoExt + ".DB") &&
-                             newLogText.ToUpperInvariant().Contains("NO ERRORS FOUND");
-
-            if (!noErrors)
-                Console.WriteLine("  [FAIL] Pdxrbld log did not report \"no errors found\" for {0}.", tableFileName);
-
-            return noErrors;
-        }
+        private static bool RunPdxrbld(string tableDir, string tableFileName) => Pdxrbld.Rebuild(tableDir, tableFileName);
 
         /// <summary>
         /// Invokes ParadoxReader.TableRebuilder.Rebuild against the given
@@ -554,7 +499,7 @@ namespace ParadoxTest
         }
 
         // --------------------------------------------------------------
-        // SQLRunner process invocation (mirrors HeaderCompareTest.RunSqlRunner)
+        // SQLRunner process invocation
         // --------------------------------------------------------------
 
         private static void RunSqlRunner(string sql)
@@ -562,86 +507,16 @@ namespace ParadoxTest
             RunSqlRunnerCapture(sql, out _, out _);
         }
 
+        // "select count(*)" over a blob-bearing table can take noticeably
+        // longer than a trivial table, so give SQLRunner extra time to
+        // compute/print its result before feeding the dismiss-prompt ENTER
+        // keystroke, and a longer overall timeout before treating it as hung.
         private static bool RunSqlRunnerCapture(string sql, out string stdout, out string stderr)
         {
-            Console.WriteLine("SQLRunner> {0}", sql);
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = SqlRunnerExePath,
-                Arguments = "/S \"" + sql + "\"",
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            var stdoutBuilder = new System.Text.StringBuilder();
-            var stderrBuilder = new System.Text.StringBuilder();
-            bool exited;
-
-            using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
-            {
-                process.OutputDataReceived += (s, e) => { if (e.Data != null) stdoutBuilder.AppendLine(e.Data); };
-                process.ErrorDataReceived += (s, e) => { if (e.Data != null) stderrBuilder.AppendLine(e.Data); };
-
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                // Give SQLRunner time to compute/print its result (e.g. a
-                // real "select count(*)" scan over a blob-bearing table can
-                // take noticeably longer than a trivial table) before
-                // sending the ENTER keystroke that dismisses its
-                // "Press ENTER to close." prompt.
-                System.Threading.Thread.Sleep(15000);
-
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited */ }
-
-                exited = process.WaitForExit(30000);
-                if (!exited)
-                {
-                    Console.WriteLine("  [warn] SQLRunner did not exit within 30s; treating as HUNG. Killing process.");
-                    try
-                    {
-                        using (var killer = new Process())
-                        {
-                            killer.StartInfo = new ProcessStartInfo
-                            {
-                                FileName = "taskkill",
-                                Arguments = "/PID " + process.Id + " /T /F",
-                                UseShellExecute = false,
-                                CreateNoWindow = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true
-                            };
-                            killer.Start();
-                            killer.WaitForExit(5000);
-                        }
-                    }
-                    catch { /* best effort */ }
-                    try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                }
-            }
-
-            System.Threading.Thread.Sleep(300);
-
-            stdout = stdoutBuilder.ToString();
-            stderr = stderrBuilder.ToString();
-
-            if (!string.IsNullOrWhiteSpace(stdout))
-                Console.WriteLine(stdout.Trim());
-            if (!string.IsNullOrWhiteSpace(stderr))
-                Console.WriteLine("  [stderr] " + stderr.Trim());
-
-            return exited;
+            var result = SqlRunner.Execute(sql, preStdinDelayMs: 15000, timeoutMs: 30000);
+            stdout = result.Stdout;
+            stderr = result.Stderr;
+            return result.Exited;
         }
     }
 }
