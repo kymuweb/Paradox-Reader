@@ -48,6 +48,25 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         public IndexManager(string dbFilePath, ParadoxFile.FieldInfo[] allFields, int primaryKeyFieldCount, int dbAutoIncVal)
+            : this(dbFilePath, allFields, primaryKeyFieldCount, dbAutoIncVal, fileStreams: null)
+        {
+        }
+
+        /// <summary>
+        /// Opens the primary and secondary indexes associated with
+        /// <paramref name="dbFilePath"/>, using an already-open
+        /// <see cref="Stream"/> from <paramref name="fileStreams"/> (keyed
+        /// by each index file's full path, e.g. a <see cref="MemoryStream"/>)
+        /// in place of opening a <see cref="FileStream"/>, for any index
+        /// file present in the dictionary. Index files not present in
+        /// <paramref name="fileStreams"/> are opened from disk as usual.
+        /// Discovery of which index files exist still checks disk (the
+        /// files must already exist as on-disk skeletons even when their
+        /// contents will be operated on in memory). Used by
+        /// <see cref="TableRebuilder"/>'s optional in-memory rebuild path.
+        /// </summary>
+        internal IndexManager(string dbFilePath, ParadoxFile.FieldInfo[] allFields, int primaryKeyFieldCount, int dbAutoIncVal,
+            IDictionary<string, Stream> fileStreams)
         {
             this.allFields            = allFields;
             this.primaryKeyFieldCount = primaryKeyFieldCount;
@@ -59,7 +78,9 @@ namespace ParadoxReader
                 if (File.Exists(pxPath))
                 {
                     var keyFields = GetFieldRange(0, primaryKeyFieldCount);
-                    PrimaryIndexFile  = new PrimaryIndexFile(pxPath, keyFields);
+                    PrimaryIndexFile = fileStreams != null && fileStreams.TryGetValue(pxPath, out var pxStream)
+                        ? new PrimaryIndexFile(pxStream, pxPath, keyFields)
+                        : new PrimaryIndexFile(pxPath, keyFields);
                     if (IsIndexOutOfDate(PrimaryIndexFile.AutoIncVal, dbAutoIncVal))
                     {
                         PrimaryIndexFile.MarkOutOfDate();
@@ -70,7 +91,7 @@ namespace ParadoxReader
             }
 
             // Secondary indexes (.Xnn, .Xgn)
-            DiscoverAndOpenSecondaryIndexes(dbFilePath, dbAutoIncVal);
+            DiscoverAndOpenSecondaryIndexes(dbFilePath, dbAutoIncVal, fileStreams);
         }
 
         /// <summary>
@@ -189,14 +210,16 @@ namespace ParadoxReader
         // Secondary index discovery
         // ----------------------------------------------------------------
 
-        private void DiscoverAndOpenSecondaryIndexes(string dbFilePath, int dbAutoIncVal)
+        private void DiscoverAndOpenSecondaryIndexes(string dbFilePath, int dbAutoIncVal, IDictionary<string, Stream> fileStreams = null)
         {
             var discovered = SecondaryIndexDiscovery.Discover(dbFilePath, allFields, primaryKeyFieldCount);
             foreach (var info in discovered)
             {
                 try
                 {
-                    var secondaryIndex = new SecondaryIndexFile(info.FilePath, info.IndexedFields, info.FieldIndices);
+                    var secondaryIndex = fileStreams != null && fileStreams.TryGetValue(info.FilePath, out var indexStream)
+                        ? new SecondaryIndexFile(indexStream, info.FilePath, info.IndexedFields, info.FieldIndices)
+                        : new SecondaryIndexFile(info.FilePath, info.IndexedFields, info.FieldIndices);
                     if (IsIndexOutOfDate(secondaryIndex.AutoIncVal, dbAutoIncVal))
                     {
                         secondaryIndex.MarkOutOfDate();

@@ -82,11 +82,11 @@ namespace ParadoxReader
         /// "RESTTEMP" name). If null, a unique name is generated so concurrent
         /// rebuilds never collide.
         /// </param>
-        public static TableRebuildResult Rebuild(string dbFilePath, string tempTableName = null)
+        public static TableRebuildResult Rebuild(string dbFilePath, string tempTableName = null, bool useMemoryStreams = false)
         {
             using (var table = new ParadoxTableFile(dbFilePath))
             {
-                return Rebuild(table, tempTableName);
+                return Rebuild(table, tempTableName, useMemoryStreams);
             }
         }
 
@@ -105,11 +105,20 @@ namespace ParadoxReader
         /// "RESTTEMP" name). If null, a unique name is generated so concurrent
         /// rebuilds never collide.
         /// </param>
-        public static TableRebuildResult Rebuild(ParadoxTableFile table, string tempTableName = null)
+        /// <param name="useMemoryStreams">
+        /// When true, the rebuilt .DB file's contents are staged entirely in
+        /// an in-memory <see cref="MemoryStream"/> while every record is
+        /// reinserted, and only written back to disk once at the end,
+        /// instead of flushing to disk after every insert. This can
+        /// significantly speed up rebuilds of large tables at the cost of
+        /// holding the whole rebuilt .DB file in memory. Index/blob files
+        /// are unaffected and continue to be written directly to disk.
+        /// </param>
+        public static TableRebuildResult Rebuild(ParadoxTableFile table, string tempTableName = null, bool useMemoryStreams = false)
         {
             if (table == null) throw new ArgumentNullException(nameof(table));
 
-            return RebuildCore(table, tempTableName, newSchema: null);
+            return RebuildCore(table, tempTableName, newSchema: null, useMemoryStreams);
         }
 
         /// <summary>
@@ -126,21 +135,21 @@ namespace ParadoxReader
         /// into the fresh skeleton exactly like <see cref="Rebuild"/> does.
         /// Takes ownership of <paramref name="table"/> and disposes it.
         /// </summary>
-        public static TableRebuildResult RebuildWithSchema(ParadoxTableFile table, TableSchemaDefinition newSchema, string tempTableName = null)
+        public static TableRebuildResult RebuildWithSchema(ParadoxTableFile table, TableSchemaDefinition newSchema, string tempTableName = null, bool useMemoryStreams = false)
         {
             if (table == null) throw new ArgumentNullException(nameof(table));
             if (newSchema == null) throw new ArgumentNullException(nameof(newSchema));
             if (newSchema.Fields == null || newSchema.Fields.Count == 0)
                 throw new ArgumentException("A table must have at least one field.", nameof(newSchema));
 
-            return RebuildCore(table, tempTableName, newSchema);
+            return RebuildCore(table, tempTableName, newSchema, useMemoryStreams);
         }
 
-        private static TableRebuildResult RebuildCore(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema)
+        private static TableRebuildResult RebuildCore(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams = false)
         {
             string dbFilePath = table.FilePath;
-            string dir        = Path.GetDirectoryName(dbFilePath) ?? ".";
-            string baseName   = Path.GetFileNameWithoutExtension(dbFilePath);
+            string dir = Path.GetDirectoryName(dbFilePath) ?? ".";
+            string baseName = Path.GetFileNameWithoutExtension(dbFilePath);
 
             // ------------------------------------------------------------
             // 1. Snapshot every record, in on-disk order, before anything
@@ -214,7 +223,7 @@ namespace ParadoxReader
             {
                 foreach (var src in sourceFiles)
                 {
-                    string ext  = Path.GetExtension(src);
+                    string ext = Path.GetExtension(src);
                     string dest = Path.Combine(dir, tempBaseName + ext);
 
                     if (ext.Equals(".MB", StringComparison.OrdinalIgnoreCase))
@@ -300,19 +309,77 @@ namespace ParadoxReader
             //    the normal WriteBlob path) completely from scratch.
             // ------------------------------------------------------------
             int migrated = 0;
-            using (var newTable = new ParadoxTableFile(tempDbPath))
+
+            // When useMemoryStreams is enabled, the temp .DB file's bytes are
+            // loaded into a MemoryStream up front, every record is inserted
+            // against that in-memory copy (avoiding a disk flush per insert -
+            // see BlockManager.WriteBlock/ParadoxTableFile.WriteRecordCountToHeader),
+            // and the final contents are written back to disk exactly once
+            // after every record has been migrated.
+            MemoryStream memDbStream = null;
+            Dictionary<string, MemoryStream> memStreamsByPath = null;
+            ParadoxTableFile newTable;
+            if (useMemoryStreams)
+            {
+                // Load every temp skeleton file (.DB, .PX, .Xgn/.Ygn, .MB)
+                // created above into its own expandable MemoryStream, keyed
+                // by full path, so ParadoxTableFile/IndexManager/
+                // ParadoxBlobFile can operate on them entirely in memory
+                // during reinsertion instead of hitting disk per write.
+                memStreamsByPath = new Dictionary<string, MemoryStream>(StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in swapPairs)
+                    memStreamsByPath[pair.Temp] = LoadExpandableMemoryStream(pair.Temp);
+
+                memDbStream = memStreamsByPath[tempDbPath];
+                var associatedStreams = new Dictionary<string, Stream>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kvp in memStreamsByPath)
+                {
+                    if (!kvp.Key.Equals(tempDbPath, StringComparison.OrdinalIgnoreCase))
+                        associatedStreams[kvp.Key] = kvp.Value;
+                }
+
+                newTable = new ParadoxTableFile(memDbStream, tempDbPath, associatedStreams);
+            }
+            else
+            {
+                newTable = new ParadoxTableFile(tempDbPath);
+            }
+            try
             {
                 var newFieldTypes = newTable.FieldTypes;
-                foreach (var original in records)
-                {
-                    object[] values = newSchema == null
-                        ? (object[])original.Clone()
-                        : RemapValues(original, oldFieldNames, oldFieldTypes, newSchema);
 
-                    ClearStaleBlobReferences(values, newFieldTypes);
-                    newTable.InsertRecord(values);
-                    migrated++;
+                // Hold the .LCK write lock for the entire reinsertion loop
+                // instead of letting each InsertRecord acquire/release it
+                // individually. This is always correct (no other process
+                // can be using the brand-new temp table yet) and, when
+                // useMemoryStreams is enabled, avoids writing/deleting the
+                // .LCK file once per record while every other write is
+                // already happening purely in memory.
+                using (newTable.AcquireScopedBatchWriteLock())
+                {
+                    foreach (var original in records)
+                    {
+                        object[] values = newSchema == null
+                            ? (object[])original.Clone()
+                            : RemapValues(original, oldFieldNames, oldFieldTypes, newSchema);
+
+                        ClearStaleBlobReferences(values, newFieldTypes);
+                        newTable.InsertRecord(values);
+                        migrated++;
+                    }
                 }
+            }
+            finally
+            {
+                if (memStreamsByPath != null)
+                {
+                    // Persist every in-memory temp artifact back to disk
+                    // exactly once, now that every record has been migrated.
+                    foreach (var kvp in memStreamsByPath)
+                        File.WriteAllBytes(kvp.Key, kvp.Value.ToArray());
+                }
+
+                newTable.Dispose();
             }
 
             // ------------------------------------------------------------
@@ -358,18 +425,61 @@ namespace ParadoxReader
             foreach (var pair in swapPairs)
             {
                 if (File.Exists(pair.Original))
-                    File.Delete(pair.Original);
+                {
+                    try
+                    {
+                        File.Delete(pair.Original);
+                    }
+                    catch
+                    {
+                        var origFolderPath = Path.GetDirectoryName(pair.Original);
+                        var origFileNameNoExt = Path.GetFileNameWithoutExtension(pair.Original);
+                        var origFileExt = Path.GetExtension(pair.Original);
+                        var tempOrigFileName = origFileNameNoExt + "_old_" + Guid.NewGuid().ToString("N").Substring(0, 8) + origFileExt;
+                        var tempOrigFilePath = Path.Combine(origFolderPath, tempOrigFileName);
+                        try
+                        {
+                            File.Move(pair.Original, tempOrigFilePath); // If we can't delete the original, move it aside so the new file can be moved into place.
+                        }
+                        catch (Exception moveAsideEx)
+                        {
+                            // Couldn't delete AND couldn't even move the original aside (e.g. still
+                            // locked by another process). There's no safe way to proceed: some file
+                            // pairs in this rebuild may already have been swapped while others
+                            // (including this one) were not, so stop immediately rather than risk
+                            // silently leaving the table in a half-rebuilt, inconsistent state.
+                            throw new IOException(
+                                $"Table rebuild aborted: could not delete or move aside the original " +
+                                $"file '{pair.Original}' (still in use?). The rebuild may be left in a " +
+                                $"partially-swapped state; re-run the rebuild once the file is no longer " +
+                                $"locked.", moveAsideEx);
+                        }
+                        TempFilePathsToBeDeletedLater?.Add(tempOrigFilePath); // Orphaned leftover — track it for later cleanup since we couldn't delete it now.
+                    }
+                }
 
-                File.Move(pair.Temp, pair.Original);
+                try
+                {
+                    // We weren't always able to move the original because "The process cannot access the file because it is being used by another process."
+                    File.Move(pair.Temp, pair.Original);
+                }
+                catch
+                {
+                    TempFilePathsToBeDeletedLater?.Add(pair.Temp); // A bit of a hack, but if we can't move the temp file over the original, just copy it and leave the temp file behind for later cleanup.
+                    File.Copy(pair.Temp, pair.Original, overwrite: true);
+                }
             }
+
 
             return new TableRebuildResult
             {
-                TableFilePath   = dbFilePath,
+                TableFilePath = dbFilePath,
                 RecordsMigrated = migrated,
-                RebuiltFiles    = swapPairs.Select(p => p.Original).ToList()
+                RebuiltFiles = swapPairs.Select(p => p.Original).ToList()
             };
         }
+
+        public static List<string> TempFilePathsToBeDeletedLater = new List<string>(); // TODO: handle these later or just don't worry?
 
         /// <summary>
         /// Builds a new record's values for <paramref name="newSchema"/> from
@@ -604,6 +714,24 @@ namespace ParadoxReader
                 fs.Position = 0;
                 return r.ReadBytes(headerSize);
             }
+        }
+
+        /// <summary>
+        /// Reads all bytes of <paramref name="path"/> into a new,
+        /// expandable <see cref="MemoryStream"/> (rewound to position 0).
+        /// <see cref="MemoryStream(byte[])"/> is deliberately avoided since
+        /// it produces a fixed-size, non-expandable buffer that throws
+        /// "Memory stream is not expandable" once a caller (e.g.
+        /// <see cref="BlockManager"/> allocating a new block) needs to grow
+        /// it past its initial length.
+        /// </summary>
+        private static MemoryStream LoadExpandableMemoryStream(string path)
+        {
+            byte[] initialBytes = File.ReadAllBytes(path);
+            var ms = new MemoryStream(initialBytes.Length);
+            ms.Write(initialBytes, 0, initialBytes.Length);
+            ms.Position = 0;
+            return ms;
         }
 
         private static void ZeroRegion(byte[] data, int offset, int length)

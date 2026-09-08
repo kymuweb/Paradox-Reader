@@ -115,6 +115,19 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         internal SecondaryIndexFile(string indexFilePath, ParadoxFile.FieldInfo[] indexedFields, int[] fieldIndices)
+            : this(new FileStream(indexFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite), indexFilePath, indexedFields, fieldIndices)
+        {
+        }
+
+        /// <summary>
+        /// Opens a secondary index whose data is backed by an already-open
+        /// <paramref name="indexStream"/> (e.g. a <see cref="MemoryStream"/>)
+        /// rather than a file on disk. <paramref name="indexFilePath"/> is
+        /// retained only for <see cref="FilePath"/> reporting/diagnostics.
+        /// Used by <see cref="TableRebuilder"/>'s optional in-memory
+        /// rebuild path.
+        /// </summary>
+        internal SecondaryIndexFile(Stream indexStream, string indexFilePath, ParadoxFile.FieldInfo[] indexedFields, int[] fieldIndices)
         {
             FilePath           = indexFilePath;
             this.indexedFields = indexedFields;
@@ -123,7 +136,7 @@ namespace ParadoxReader
             foreach (var f in indexedFields)
                 keyDataSize += f.fSize;
 
-            indexFile     = new ParadoxFile(indexFilePath);
+            indexFile     = new ParadoxFile(indexStream);
 
             // The entry pointer width varies by index file (2 bytes observed
             // for some .Xgn/.Ygn files, 6 bytes - blockNumber + recordCount +

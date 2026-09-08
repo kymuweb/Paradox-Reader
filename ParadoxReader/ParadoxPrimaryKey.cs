@@ -54,6 +54,28 @@ namespace ParadoxReader
         }
 
         /// <summary>
+        /// Opens this read-side .PX handle against an already-open
+        /// <paramref name="pxStream"/> (e.g. a <see cref="MemoryStream"/>)
+        /// rather than a file on disk. <paramref name="filePath"/> is
+        /// retained only for <see cref="FilePath"/> reporting/diagnostics.
+        /// Used by <see cref="TableRebuilder"/>'s optional in-memory
+        /// rebuild path.
+        /// </summary>
+        internal ParadoxPrimaryKey(ParadoxFile table, Stream pxStream, string filePath)
+            : base(pxStream)
+        {
+            this.table = table;
+            this.FilePath = filePath;
+
+            this.primaryKeyFieldsArray = table.FieldTypes.Take(table.primaryKeyFields).ToArray();
+            foreach (var f in this.primaryKeyFieldsArray)
+                keyDataSize += f.fSize;
+
+            entrySize     = keyDataSize + POINTER_SIZE;
+            blockCapacity = this.maxTableSize * 0x400 - HEADER_SIZE;
+        }
+
+        /// <summary>
         /// True if this index's autoIncVal didn't match the parent .DB's at
         /// open time. Attempting to <see cref="Enumerate"/> while this is
         /// true throws <see cref="IndexOutOfDateException"/>.

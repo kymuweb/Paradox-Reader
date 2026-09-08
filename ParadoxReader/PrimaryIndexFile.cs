@@ -88,6 +88,19 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         public PrimaryIndexFile(string pxFilePath, ParadoxFile.FieldInfo[] primaryKeyFields)
+            : this(new FileStream(pxFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite), pxFilePath, primaryKeyFields)
+        {
+        }
+
+        /// <summary>
+        /// Opens a primary index whose .PX data is backed by an
+        /// already-open <paramref name="pxStream"/> (e.g. a
+        /// <see cref="MemoryStream"/>) rather than a file on disk.
+        /// <paramref name="pxFilePath"/> is retained only for
+        /// <see cref="FilePath"/> reporting/diagnostics. Used by
+        /// <see cref="TableRebuilder"/>'s optional in-memory rebuild path.
+        /// </summary>
+        internal PrimaryIndexFile(Stream pxStream, string pxFilePath, ParadoxFile.FieldInfo[] primaryKeyFields)
         {
             FilePath = pxFilePath;
             this.primaryKeyFields = primaryKeyFields;
@@ -96,7 +109,7 @@ namespace ParadoxReader
                 keyDataSize += f.fSize;
 
             entrySize     = keyDataSize + POINTER_SIZE;
-            pxFile        = new ParadoxFile(pxFilePath);
+            pxFile        = new ParadoxFile(pxStream);
             blockCapacity = pxFile.maxTableSize * 0x400 - HEADER_SIZE;
 
             System.Diagnostics.Debug.WriteLine(

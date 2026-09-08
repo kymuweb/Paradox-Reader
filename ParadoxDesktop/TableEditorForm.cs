@@ -710,6 +710,8 @@ namespace ParadoxDesktop
 
             string dbFilePath = table.FilePath;
 
+            bool useMemoryStreams = true; // TODO: either ask or make this a configurable setting in an options menu and saved in %programdata% or a config file etc. for now i'm testing it so it'll be true.
+
             using (var structureForm = new TableStructureForm(TableStructureMode.Modify, table))
             {
                 if (structureForm.ShowDialog(this) != DialogResult.OK)
@@ -719,7 +721,7 @@ namespace ParadoxDesktop
 
                 try
                 {
-                    var result = TableRebuilder.RebuildWithSchema(table, newSchema);
+                    var result = TableRebuilder.RebuildWithSchema(table, newSchema, tempTableName: null, useMemoryStreams: useMemoryStreams);
                     table = new ParadoxTableFile(dbFilePath);
                     SetupGrid();
 
@@ -751,9 +753,11 @@ namespace ParadoxDesktop
 
             string dbFilePath = table.FilePath;
 
+            bool useMemoryStreams = true; // TODO: either ask or make this a configurable setting in an options menu and saved in %programdata% or a config file etc. for now i'm testing it so it'll be true.
+
             try
             {
-                var result = TableRebuilder.Rebuild(table);
+                var result = TableRebuilder.Rebuild(table, tempTableName: null, useMemoryStreams: useMemoryStreams);
                 table = new ParadoxTableFile(dbFilePath);
                 SetupGrid();
 
