@@ -60,7 +60,7 @@ namespace ParadoxTest
         /// <param name="filter">Optional substring filter on table base name (case-insensitive).</param>
         public static void Run(string corpusRoot, int maxTables, string filter)
         {
-            if (Net35Compat.IsNullOrWhiteSpace(corpusRoot))
+            if (string.IsNullOrWhiteSpace(corpusRoot))
                 corpusRoot = Configuration.GetCorpusDataRootPath();
 
             // Final fallback: the bundled fixture data folder copied to the
@@ -70,12 +70,12 @@ namespace ParadoxTest
             // Test Explorer, is the test host's own path rather than
             // ParadoxTest's bin\Debug folder). This keeps ".\data" working
             // for both `ParadoxTest.exe` and unit-test-driven runs.
-            if (Net35Compat.IsNullOrWhiteSpace(corpusRoot))
+            if (string.IsNullOrWhiteSpace(corpusRoot))
             {
                 corpusRoot = Path.Combine(Directory.GetCurrentDirectory(), "data");
             }
 
-            if (Net35Compat.IsNullOrWhiteSpace(corpusRoot) || !Directory.Exists(corpusRoot))
+            if (string.IsNullOrWhiteSpace(corpusRoot) || !Directory.Exists(corpusRoot))
             {
                 Console.WriteLine("[corpustest] Corpus root not found: {0}", corpusRoot);
                 Console.WriteLine("[corpustest] Pass a corpusRoot argument, or set the \"CorpusDataRootPath\" " +
@@ -97,7 +97,7 @@ namespace ParadoxTest
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (!Net35Compat.IsNullOrWhiteSpace(filter))
+            if (!string.IsNullOrWhiteSpace(filter))
             {
                 tableBaseNames = tableBaseNames
                     .Where(n => n.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)

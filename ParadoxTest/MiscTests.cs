@@ -1977,9 +1977,9 @@ namespace ParadoxTest
                 string stdout = stdoutBuilder.ToString();
                 string stderr = stderrBuilder.ToString();
 
-                if (!Net35Compat.IsNullOrWhiteSpace(stdout))
+                if (!string.IsNullOrWhiteSpace(stdout))
                     Console.WriteLine(stdout.Trim());
-                if (!Net35Compat.IsNullOrWhiteSpace(stderr))
+                if (!string.IsNullOrWhiteSpace(stderr))
                     Console.WriteLine("  [stderr] " + stderr.Trim());
             }
 
