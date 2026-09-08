@@ -370,7 +370,7 @@ namespace ParadoxTest
         /// file if shorter). Returns the total number of differing bytes
         /// found (0 = identical headers across every paired file).
         /// </summary>
-        private static int CompareAllHeaders(string oursDir, string sqlDir, string baseName)
+        internal static int CompareAllHeaders(string oursDir, string sqlDir, string baseName)
         {
             var oursFiles = Directory.GetFiles(oursDir, baseName + ".*")
                 .Where(f => !Path.GetExtension(f).Equals(".LCK", StringComparison.OrdinalIgnoreCase))
@@ -495,7 +495,7 @@ namespace ParadoxTest
         // SQLRunner process invocation (mirrors CorpusTest.RunSqlRunner)
         // --------------------------------------------------------------
 
-        private static void ResetDir(string dir)
+        internal static void ResetDir(string dir)
         {
             if (Directory.Exists(dir))
             {
@@ -510,6 +510,6 @@ namespace ParadoxTest
             }
         }
 
-        private static void RunSqlRunner(string sql) => SqlRunner.Execute(sql);
+        internal static void RunSqlRunner(string sql) => SqlRunner.Execute(sql);
     }
 }

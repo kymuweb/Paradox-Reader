@@ -23,38 +23,78 @@ namespace ParadoxReader
     /// </remarks>
     internal static class ParadoxHeaderBuilder
     {
-        // BDE always creates fresh tables with fileVersionID == 0x0B (Paradox
-        // 7 format, 79-byte short table-name layout), never 0x0C - confirmed
+        // Which Paradox on-disk format level newly created tables use.
+        // Historically this library always wrote 0x0B (Paradox 5/7 short
+        // "compatible" format, 79-byte table-name layout), matching the
+        // BDE's default idapi32.cfg PARADOX LEVEL=5 setting - confirmed
         // empirically across every real BDE-created fixture file in
-        // ParadoxTest\data (TESTTAB.DB/.PX and its variants all have
-        // fileVersionID == 0x0B at offset 0x39). Using 0x0C caused readers
-        // like BB's Database Desktop to reject freshly created files with
-        // "Older version (see context)", since files claiming the 0x0C
-        // (long table-name) layout must be laid out differently than what
-        // this builder was producing.
-        private const byte FileVersionId = 0x0B;
+        // ParadoxTest\data captured under that config (TESTTAB.DB/.PX and
+        // its variants all have fileVersionID == 0x0B at offset 0x39).
+        //
+        // Byte-diffing tables created by a real, unmodified BDE (via
+        // SQLRunner) under PARADOX LEVEL=5/BLOCK SIZE=2048 vs
+        // PARADOX LEVEL=7/BLOCK SIZE=32768 (see
+        // ParadoxTest.BdeConfigCompareTest) shows the *only* content
+        // differences driven by that config change are: this fileVersionID
+        // byte (0x0B -> 0x0C at offset 0x39, and the matching 0x0100|id
+        // stamp in the V4 header), the maxTableSize byte (see
+        // DefaultMaxTableSize below), and the resulting shift of every
+        // byte after the table-name field once nameFieldLength grows from
+        // 79 to 261 (which BuildHeader already handles via the
+        // FileVersionId >= 0x0C check below) - no other structural changes
+        // were observed for any of the 9 schema shapes tested (plain field,
+        // PK-only, PK+alpha, PK+alpha+secondary index, AUTOINC variants,
+        // memo, and BLOb fields), so 0x0C is safe to use as the new default
+        // in order to support the larger 32768-byte block size (see
+        // DefaultMaxTableSize) and its ~4GB max table size.
+        private const byte FileVersionId = 0x0C;
 
         // A .PX/.XGn leaf entry's pointer overhead: blockNumber(2) +
         // recordCount(2) + reserved(2). Mirrors PrimaryIndexFile.POINTER_SIZE
         // / SecondaryIndexFile.POINTER_SIZE.
         private const int PxPointerSize = 6;
 
-        // BDE always creates fresh tables with maxTableSize = 2 (2048-byte
-        // blocks), never 1 (1024-byte blocks), regardless of schema -
-        // confirmed empirically across every real BDE-created fixture file
-        // in ParadoxTest\data (TESTTAB.DB/.PX/.XG0-2 and its variants): all
-        // of them have maxTableSize == 2 at offset 0x05, independent of
-        // record size or field count.
-        private const byte DefaultMaxTableSize = 2; // 2048-byte blocks
+        // Which block size (in KB) newly created tables use, encoded as a
+        // single byte at offset 0x05 (blockSize = maxTableSize * 1024).
+        // Historically this library always wrote 2 (2048-byte blocks,
+        // ~128MB max table size), matching the BDE's default idapi32.cfg
+        // BLOCK SIZE=2048 setting - confirmed empirically across every real
+        // BDE-created fixture file in ParadoxTest\data captured under that
+        // config (TESTTAB.DB/.PX/.XG0-2 and its variants all have
+        // maxTableSize == 2, independent of record size or field count).
+        //
+        // Per ParadoxTest.BdeConfigCompareTest (byte-diffing real
+        // SQLRunner/BDE-created tables under BLOCK SIZE=2048 vs
+        // BLOCK SIZE=32768), the only content difference this config
+        // change drives is this byte (2 -> 32) plus the pointer/offset
+        // fields that are naturally recomputed from it - so 32 (32768-byte
+        // blocks, ~4GB max table size) is safe to use as the new default.
+        private const byte DefaultMaxTableSize = 32; // 32768-byte blocks
 
-        // BDE also always pads a freshly created file's header out to
-        // exactly one full block (headerSize == maxTableSize * 0x400 == 2048
-        // for the default maxTableSize above), rather than using the
-        // minimal byte count actually needed by the header fields + field
-        // defs + names, as this library previously did. Confirmed
-        // empirically: every real BDE-created fixture file (.DB/.PX/.XG0-2)
-        // has headerSize == 0x0800 (2048) regardless of its content length.
-        private const int DefaultHeaderSize = DefaultMaxTableSize * 0x400;
+        // .PX (primary index) and .YGn ("maintained field" companion) files
+        // are the exception to DefaultMaxTableSize above: per
+        // ParadoxTest.BdeConfigCompareTest, real BDE-created .PX/.YGn files
+        // always use fixed 2048-byte blocks (maxTableSize == 2) regardless
+        // of the table's configured BLOCK SIZE/DefaultMaxTableSize -
+        // confirmed by comparing a real SQLRunner/BDE-created .PX/.YGn under
+        // BLOCK SIZE=32768 (maxTableSize byte stayed 2) against their
+        // sibling .DB/.XGn files (which did scale to 32). Only .DB and
+        // .XGn/.Xnn/.Ynn files use DefaultMaxTableSize.
+        private const byte FixedSmallMaxTableSize = 2; // 2048-byte blocks, always
+
+        // BDE also always pads a freshly created (empty) file's header block
+        // out to exactly 2048 bytes, rather than the minimal byte count
+        // actually needed by the header fields + field defs + names, as this
+        // library previously did. Confirmed empirically: every real
+        // BDE-created fixture file (.DB/.PX/.XG0-2) has headerSize == 0x0800
+        // (2048) regardless of its content length - and per
+        // ParadoxTest.BdeConfigCompareTest this header-block size does NOT
+        // scale with the data block size (maxTableSize/DefaultMaxTableSize
+        // above): a real BDE table created with BLOCK SIZE=32768 still has
+        // this exact same 2048-byte empty header block on disk (only the
+        // *data* blocks that follow it are 32768 bytes each). So this must
+        // stay a fixed 2048 constant, not maxTableSize * 0x400.
+        private const int DefaultHeaderSize = 2 * 0x400;
 
         private const int V4HeaderSize = 32;
 
@@ -95,7 +135,7 @@ namespace ParadoxReader
             int keyDataSize = keyFields.Sum(f => (int)f.Size);
             int pxRecordSize = keyDataSize + PxPointerSize;
 
-            return BuildHeader(schema, ParadoxFileType.PxFile, keyFields, includeFieldNames: false, recordSizeOverride: pxRecordSize);
+            return BuildHeader(schema, ParadoxFileType.PxFile, keyFields, includeFieldNames: false, recordSizeOverride: pxRecordSize, maxTableSizeOverride: FixedSmallMaxTableSize);
         }
 
         /// <summary>
@@ -157,7 +197,13 @@ namespace ParadoxReader
             var fields = BuildSecondaryIndexFieldList(schema, index);
             var zeroedFields = fields.Select(f => new TableFieldDefinition(string.Empty, (ParadoxFieldTypes)0, 0, false)).ToList();
 
-            return BuildHeader(schema, ParadoxFileType.YgnFile, zeroedFields, includeFieldNames: false, indexFieldNumber: 0);
+            // Like .PX, real BDE-created .YGn "maintained field" companion
+            // files always use fixed 2048-byte blocks (maxTableSize == 2)
+            // regardless of the table's configured block size - confirmed
+            // empirically (see ParadoxTest.BdeConfigCompareTest /
+            // FixedSmallMaxTableSize remarks above); only the corresponding
+            // .XGn index file itself scales with DefaultMaxTableSize.
+            return BuildHeader(schema, ParadoxFileType.YgnFile, zeroedFields, includeFieldNames: false, indexFieldNumber: 0, maxTableSizeOverride: FixedSmallMaxTableSize);
         }
 
         /// <summary>
@@ -214,8 +260,10 @@ namespace ParadoxReader
             List<TableFieldDefinition> fields,
             bool includeFieldNames,
             int indexFieldNumber = -1,
-            int? recordSizeOverride = null)
+            int? recordSizeOverride = null,
+            byte? maxTableSizeOverride = null)
         {
+            byte maxTableSize = maxTableSizeOverride ?? DefaultMaxTableSize;
             using (var ms = new MemoryStream())
             using (var w = new BinaryWriter(ms, Encoding.ASCII))
             {
@@ -246,7 +294,7 @@ namespace ParadoxReader
                 w.Write((ushort)recordSize);       // 0x00 RecordSize
                 w.Write((ushort)0);                 // 0x02 headerSize (patched below)
                 w.Write((byte)fileType);            // 0x04 FileType
-                w.Write(DefaultMaxTableSize);        // 0x05 maxTableSize
+                w.Write(maxTableSize);                // 0x05 maxTableSize
                 w.Write(0);                          // 0x06 RecordCount
                 w.Write((ushort)0);                  // 0x0A nextBlock
                 w.Write((ushort)0);                  // 0x0C fileBlocks

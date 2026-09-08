@@ -191,6 +191,20 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "bdeconfigcomparetest")
+            {
+                // Usage: ParadoxTest.exe bdeconfigcomparetest
+                // Swaps the live BDE idapi32.cfg between the
+                // "original settings" (Paradox level 5, 2048-byte blocks) and
+                // "larger block size" (Paradox level 7, 32768-byte blocks)
+                // backups, creates every HeaderCompareTest schema shape via
+                // SQLRunner (real BDE) under each, and byte-diffs the
+                // resulting headers to isolate exactly what the BDE-level
+                // version/block-size defaults change on disk.
+                BdeConfigCompareTest.Run();
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "createtabletest")
             {
                 // Usage: ParadoxTest.exe createtabletest
