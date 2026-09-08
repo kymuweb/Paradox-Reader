@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace ParadoxReader
 {
@@ -21,6 +22,89 @@ namespace ParadoxReader
         /// that was recreated as part of the rebuild.
         /// </summary>
         public List<string> RebuiltFiles { get; internal set; }
+    }
+
+    /// <summary>
+    /// Major phases of a <see cref="TableRebuilder"/> rebuild operation, reported via
+    /// <see cref="TableRebuildProgress"/> in declaration/execution order.
+    /// </summary>
+    public enum RebuildStage
+    {
+        /// <summary>Reading every existing record into memory before anything is modified.</summary>
+        Snapshotting = 0,
+
+        /// <summary>Creating the empty .DB/.PX/.Xnn/.Xgn/.Ynn/.Ygn/.MB skeleton files.</summary>
+        BuildingSkeletons = 1,
+
+        /// <summary>Re-inserting every snapshotted record into the fresh skeleton.</summary>
+        InsertingRecords = 2,
+
+        /// <summary>Persisting in-memory staged file contents back to disk (only when useMemoryStreams is true).</summary>
+        FlushingToDisk = 3,
+
+        /// <summary>Restoring preserved change-count/write-counter header bytes.</summary>
+        RestoringMetadata = 4,
+
+        /// <summary>Atomically swapping the rebuilt files back over the originals.</summary>
+        SwappingFiles = 5
+    }
+
+    /// <summary>
+    /// Progress snapshot reported by <see cref="TableRebuilder"/> during a rebuild via
+    /// <see cref="IProgress{T}"/>. Exposes both an overall, monotonically-increasing
+    /// <see cref="OverallPercent"/> (suitable for a single "total progress" bar that only
+    /// ever completes once from 0 to 100 across the whole operation) and a
+    /// <see cref="StagePercent"/> that resets back to 0 at the start of every new
+    /// <see cref="Stage"/> (suitable for a secondary "current step" bar).
+    /// </summary>
+    public sealed class TableRebuildProgress
+    {
+        /// <summary>The major phase currently executing.</summary>
+        public RebuildStage Stage { get; }
+
+        /// <summary>1-based ordinal of <see cref="Stage"/> among <see cref="TotalStages"/>.</summary>
+        public int StageNumber { get; }
+
+        /// <summary>Total number of major stages in this rebuild.</summary>
+        public int TotalStages { get; }
+
+        /// <summary>Progress (0-100) within the current <see cref="Stage"/> only; resets to 0 at the start of each stage.</summary>
+        public double StagePercent { get; }
+
+        /// <summary>Optional human-readable status message (e.g. "Reinserting record 1,234 of 5,000").</summary>
+        public string Message { get; }
+
+        /// <summary>
+        /// Overall progress (0-100) across the entire rebuild, computed from the current
+        /// stage's ordinal position plus its own fractional completion. Increases
+        /// monotonically and completes exactly once per rebuild.
+        /// </summary>
+        public double OverallPercent =>
+            TotalStages <= 0 ? 0 : ((StageNumber - 1) + (StagePercent / 100.0)) / TotalStages * 100.0;
+
+        internal TableRebuildProgress(RebuildStage stage, int stageNumber, int totalStages, double stagePercent, string message)
+        {
+            Stage = stage;
+            StageNumber = stageNumber;
+            TotalStages = totalStages;
+            StagePercent = stagePercent;
+            Message = message;
+        }
+
+        /// <summary>Short, human-readable display name for <paramref name="stage"/> (e.g. for a UI label above a progress bar).</summary>
+        public static string GetStageDisplayName(RebuildStage stage)
+        {
+            switch (stage)
+            {
+                case RebuildStage.Snapshotting: return "Reading existing records";
+                case RebuildStage.BuildingSkeletons: return "Building empty table skeleton";
+                case RebuildStage.InsertingRecords: return "Reinserting records";
+                case RebuildStage.FlushingToDisk: return "Flushing to disk";
+                case RebuildStage.RestoringMetadata: return "Restoring table metadata";
+                case RebuildStage.SwappingFiles: return "Swapping in rebuilt files";
+                default: return stage.ToString();
+            }
+        }
     }
 
     /// <summary>
@@ -82,11 +166,14 @@ namespace ParadoxReader
         /// "RESTTEMP" name). If null, a unique name is generated so concurrent
         /// rebuilds never collide.
         /// </param>
-        public static TableRebuildResult Rebuild(string dbFilePath, string tempTableName = null, bool useMemoryStreams = false)
+        /// <param name="progress">Optional progress reporter invoked as the rebuild advances through its stages.</param>
+        /// <param name="cancellationToken">Optional token; checked between records/files so the rebuild can be cancelled cooperatively.</param>
+        public static TableRebuildResult Rebuild(string dbFilePath, string tempTableName = null, bool useMemoryStreams = false,
+            IProgress<TableRebuildProgress> progress = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             using (var table = new ParadoxTableFile(dbFilePath))
             {
-                return Rebuild(table, tempTableName, useMemoryStreams);
+                return Rebuild(table, tempTableName, useMemoryStreams, progress, cancellationToken);
             }
         }
 
@@ -114,11 +201,14 @@ namespace ParadoxReader
         /// holding the whole rebuilt .DB file in memory. Index/blob files
         /// are unaffected and continue to be written directly to disk.
         /// </param>
-        public static TableRebuildResult Rebuild(ParadoxTableFile table, string tempTableName = null, bool useMemoryStreams = false)
+        /// <param name="progress">Optional progress reporter invoked as the rebuild advances through its stages.</param>
+        /// <param name="cancellationToken">Optional token; checked between records/files so the rebuild can be cancelled cooperatively.</param>
+        public static TableRebuildResult Rebuild(ParadoxTableFile table, string tempTableName = null, bool useMemoryStreams = false,
+            IProgress<TableRebuildProgress> progress = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (table == null) throw new ArgumentNullException(nameof(table));
 
-            return RebuildCore(table, tempTableName, newSchema: null, useMemoryStreams);
+            return RebuildCore(table, tempTableName, newSchema: null, useMemoryStreams, progress, cancellationToken);
         }
 
         /// <summary>
@@ -135,18 +225,46 @@ namespace ParadoxReader
         /// into the fresh skeleton exactly like <see cref="Rebuild"/> does.
         /// Takes ownership of <paramref name="table"/> and disposes it.
         /// </summary>
-        public static TableRebuildResult RebuildWithSchema(ParadoxTableFile table, TableSchemaDefinition newSchema, string tempTableName = null, bool useMemoryStreams = false)
+        /// <param name="progress">Optional progress reporter invoked as the rebuild advances through its stages.</param>
+        /// <param name="cancellationToken">Optional token; checked between records/files so the rebuild can be cancelled cooperatively.</param>
+        public static TableRebuildResult RebuildWithSchema(ParadoxTableFile table, TableSchemaDefinition newSchema, string tempTableName = null, bool useMemoryStreams = false,
+            IProgress<TableRebuildProgress> progress = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (table == null) throw new ArgumentNullException(nameof(table));
             if (newSchema == null) throw new ArgumentNullException(nameof(newSchema));
             if (newSchema.Fields == null || newSchema.Fields.Count == 0)
                 throw new ArgumentException("A table must have at least one field.", nameof(newSchema));
 
-            return RebuildCore(table, tempTableName, newSchema, useMemoryStreams);
+            return RebuildCore(table, tempTableName, newSchema, useMemoryStreams, progress, cancellationToken);
         }
 
-        private static TableRebuildResult RebuildCore(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams = false)
+        private static TableRebuildResult RebuildCore(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams,
+            IProgress<TableRebuildProgress> progress, CancellationToken cancellationToken)
         {
+            bool tableDisposed = false;
+            try
+            {
+                return RebuildCoreImpl(table, tempTableName, newSchema, useMemoryStreams, progress, cancellationToken, () => tableDisposed = true);
+            }
+            catch (OperationCanceledException)
+            {
+                // RebuildCore takes ownership of `table` regardless of outcome; if cancellation
+                // happened before the normal swap step disposed it (which releases its file
+                // handles/lock), dispose it here so the original table remains usable afterward.
+                if (!tableDisposed)
+                    table.Dispose();
+                throw;
+            }
+        }
+
+        private static TableRebuildResult RebuildCoreImpl(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams,
+            IProgress<TableRebuildProgress> progress, CancellationToken cancellationToken, Action onTableDisposed)
+        {
+            // Stage numbering/order must match RebuildStage's declaration order.
+            const int totalStages = 6;
+            void Report(RebuildStage stage, double stagePercent, string message = null) =>
+                progress?.Report(new TableRebuildProgress(stage, (int)stage + 1, totalStages, stagePercent, message));
+
             var overallStopwatch = System.Diagnostics.Stopwatch.StartNew();
             string dbFilePath = table.FilePath;
             string dir = Path.GetDirectoryName(dbFilePath) ?? ".";
@@ -158,10 +276,18 @@ namespace ParadoxReader
             //    order, so insertion order into the rebuilt table exactly
             //    matches the original physical layout.
             // ------------------------------------------------------------
+            Report(RebuildStage.Snapshotting, 0, "Reading existing records");
             var snapshotStopwatch = System.Diagnostics.Stopwatch.StartNew();
             var records = new List<object[]>();
+            int approxRecordCount = Math.Max(1, table.RecordCount);
             foreach (var rec in table.Enumerate())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 records.Add(rec.DataValues);
+                if ((records.Count & 0xFF) == 0)
+                    Report(RebuildStage.Snapshotting, Math.Min(100.0, records.Count * 100.0 / approxRecordCount), $"Reading record {records.Count:N0}");
+            }
+            Report(RebuildStage.Snapshotting, 100, $"Read {records.Count:N0} record(s)");
             snapshotStopwatch.Stop();
             System.Diagnostics.Debug.WriteLine(
                 $"TableRebuilder.RebuildCore [{baseName}]: snapshotted {records.Count} records in {snapshotStopwatch.ElapsedMilliseconds}ms.");
@@ -193,6 +319,7 @@ namespace ParadoxReader
             //    ParadoxHeaderBuilder, since the field layout itself is
             //    changing.
             // ------------------------------------------------------------
+            Report(RebuildStage.BuildingSkeletons, 0, "Building empty table skeleton");
             var swapPairs = new List<FilePair>();
             string oldMbPath = sourceFiles.FirstOrDefault(f => Path.GetExtension(f).Equals(".MB", StringComparison.OrdinalIgnoreCase));
 
@@ -305,6 +432,8 @@ namespace ParadoxReader
             }
 
             string tempDbPath = Path.Combine(dir, tempBaseName + ".DB");
+            Report(RebuildStage.BuildingSkeletons, 100, "Skeleton files created");
+            cancellationToken.ThrowIfCancellationRequested();
 
             // ------------------------------------------------------------
             // 4. Re-insert every record into the fresh skeleton. This
@@ -350,6 +479,7 @@ namespace ParadoxReader
                 newTable = new ParadoxTableFile(tempDbPath);
             }
             var recordWriteStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            bool cancelled = false;
             try
             {
                 var newFieldTypes = newTable.FieldTypes;
@@ -363,8 +493,12 @@ namespace ParadoxReader
                 // already happening purely in memory.
                 using (newTable.AcquireScopedBatchWriteLock())
                 {
+                    int totalRecords = Math.Max(1, records.Count);
+                    Report(RebuildStage.InsertingRecords, 0, $"Reinserting record 0 of {records.Count:N0}");
                     foreach (var original in records)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
+
                         object[] values = newSchema == null
                             ? (object[])original.Clone()
                             : RemapValues(original, oldFieldNames, oldFieldTypes, newSchema);
@@ -372,6 +506,9 @@ namespace ParadoxReader
                         ClearStaleBlobReferences(values, newFieldTypes);
                         newTable.InsertRecord(values);
                         migrated++;
+
+                        if ((migrated & 0xFF) == 0 || migrated == records.Count)
+                            Report(RebuildStage.InsertingRecords, migrated * 100.0 / totalRecords, $"Reinserting record {migrated:N0} of {records.Count:N0}");
                     }
                 }
                 recordWriteStopwatch.Stop();
@@ -379,21 +516,50 @@ namespace ParadoxReader
                     $"TableRebuilder.RebuildCore [{baseName}]: reinserted {migrated} records in {recordWriteStopwatch.ElapsedMilliseconds}ms " +
                     $"({(migrated > 0 ? recordWriteStopwatch.Elapsed.TotalMilliseconds / migrated : 0):F3}ms/record, useMemoryStreams={useMemoryStreams}).");
             }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+                throw;
+            }
             finally
             {
-                if (memStreamsByPath != null)
+                if (cancelled)
+                {
+                    // Skip flushing to disk and dispose without writing anything further;
+                    // best-effort cleanup of the temp skeleton files created above so a
+                    // cancelled rebuild doesn't leave orphaned *_rbld.* artifacts behind.
+                    // The original table's files are untouched at this point (the swap
+                    // in step 5 hasn't happened yet), so the source table remains usable.
+                    newTable.Dispose();
+                    foreach (var pair in swapPairs)
+                    {
+                        try { if (File.Exists(pair.Temp)) File.Delete(pair.Temp); } catch { /* best effort */ }
+                    }
+                }
+                else if (memStreamsByPath != null)
                 {
                     // Persist every in-memory temp artifact back to disk
                     // exactly once, now that every record has been migrated.
+                    Report(RebuildStage.FlushingToDisk, 0, "Flushing to disk");
                     var flushStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    int flushed = 0;
                     foreach (var kvp in memStreamsByPath)
+                    {
                         File.WriteAllBytes(kvp.Key, kvp.Value.ToArray());
+                        flushed++;
+                        Report(RebuildStage.FlushingToDisk, flushed * 100.0 / memStreamsByPath.Count, $"Flushed {flushed} of {memStreamsByPath.Count} file(s)");
+                    }
                     flushStopwatch.Stop();
                     System.Diagnostics.Debug.WriteLine(
                         $"TableRebuilder.RebuildCore [{baseName}]: flushed {memStreamsByPath.Count} in-memory temp file(s) to disk in {flushStopwatch.ElapsedMilliseconds}ms.");
-                }
 
-                newTable.Dispose();
+                    newTable.Dispose();
+                }
+                else
+                {
+                    Report(RebuildStage.FlushingToDisk, 100, "Nothing to flush (writing directly to disk)");
+                    newTable.Dispose();
+                }
             }
 
             // ------------------------------------------------------------
@@ -403,8 +569,17 @@ namespace ParadoxReader
             //     increment path above left behind. See the snapshot capture
             //     above and CreateEmptyTableSkeleton's remarks for why.
             // ------------------------------------------------------------
+            // This is the last point at which cancellation is safe: nothing
+            // below has touched the original table's files yet, so throwing
+            // here leaves the source table completely untouched (only the
+            // *_rbld.* temp files, cleaned up by the caller/finally above,
+            // are affected).
+            cancellationToken.ThrowIfCancellationRequested();
+            Report(RebuildStage.RestoringMetadata, 0, "Restoring table metadata");
             if (newSchema == null)
             {
+                int restored = 0;
+                int toRestore = swapPairs.Count(p => preservedChangeCounts.ContainsKey(Path.GetExtension(p.Temp)));
                 foreach (var pair in swapPairs)
                 {
                     string ext = Path.GetExtension(pair.Temp);
@@ -426,16 +601,26 @@ namespace ParadoxReader
                             fs.WriteByte(saved[0]);
                         }
                     }
+                    restored++;
+                    if (toRestore > 0)
+                        Report(RebuildStage.RestoringMetadata, restored * 100.0 / toRestore, $"Restored {restored} of {toRestore} file(s)");
                 }
             }
+            Report(RebuildStage.RestoringMetadata, 100, "Table metadata restored");
 
             // ------------------------------------------------------------
             // 5. Release the original table's file handles/lock so its
             //    files can be deleted, then atomically swap the rebuilt
             //    files back over the originals.
             // ------------------------------------------------------------
+            // Beyond this point the operation is no longer cancellable: files
+            // are actively being swapped, and stopping partway through would
+            // leave the table in a mixed old/new state.
+            Report(RebuildStage.SwappingFiles, 0, "Swapping in rebuilt files");
             table.Dispose();
+            onTableDisposed();
 
+            int swapped = 0;
             foreach (var pair in swapPairs)
             {
                 if (File.Exists(pair.Original))
@@ -482,6 +667,9 @@ namespace ParadoxReader
                     TempFilePathsToBeDeletedLater?.Add(pair.Temp); // A bit of a hack, but if we can't move the temp file over the original, just copy it and leave the temp file behind for later cleanup.
                     File.Copy(pair.Temp, pair.Original, overwrite: true);
                 }
+
+                swapped++;
+                Report(RebuildStage.SwappingFiles, swapped * 100.0 / Math.Max(1, swapPairs.Count), $"Swapped {swapped} of {swapPairs.Count} file(s)");
             }
 
 

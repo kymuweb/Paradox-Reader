@@ -718,27 +718,34 @@ namespace ParadoxDesktop
                     return;
 
                 var newSchema = structureForm.Schema;
+                var tableToRebuild = table;
+                table = null; // RebuildProgressForm's operation takes ownership/disposes it.
 
-                try
+                var progressForm = RebuildProgressForm.RunModal(this, "Modifying Structure...",
+                    (progress, cancellationToken) => TableRebuilder.RebuildWithSchema(
+                        tableToRebuild, newSchema, tempTableName: null, useMemoryStreams: useMemoryStreams,
+                        progress: progress, cancellationToken: cancellationToken));
+
+                table = new ParadoxTableFile(dbFilePath);
+                SetupGrid();
+
+                if (progressForm.WasCancelled)
                 {
-                    var result = TableRebuilder.RebuildWithSchema(table, newSchema, tempTableName: null, useMemoryStreams: useMemoryStreams);
-                    table = new ParadoxTableFile(dbFilePath);
-                    SetupGrid();
-
+                    MessageBox.Show(this, "Modify structure was cancelled.", "Modify Structure",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else if (progressForm.Error != null)
+                {
+                    MessageBox.Show(this, "Modify structure failed:\r\n" + progressForm.Error.Message, "Modify Structure",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    var result = progressForm.Result;
                     MessageBox.Show(this,
                         string.Format("Structure updated. {0} record(s) migrated across {1} file(s).",
                             result.RecordsMigrated, result.RebuiltFiles.Count),
                         "Modify Structure", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (Exception ex)
-                {
-                    // TableRebuilder disposes the table even on failure paths that
-                    // already got past opening it; reopen so this editor window stays usable.
-                    table = new ParadoxTableFile(dbFilePath);
-                    SetupGrid();
-
-                    MessageBox.Show(this, "Modify structure failed:\r\n" + ex.Message, "Modify Structure",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
         }
@@ -755,26 +762,34 @@ namespace ParadoxDesktop
 
             bool useMemoryStreams = true; // TODO: either ask or make this a configurable setting in an options menu and saved in %programdata% or a config file etc. for now i'm testing it so it'll be true.
 
-            try
-            {
-                var result = TableRebuilder.Rebuild(table, tempTableName: null, useMemoryStreams: useMemoryStreams);
-                table = new ParadoxTableFile(dbFilePath);
-                SetupGrid();
+            var tableToRebuild = table;
+            table = null; // RebuildProgressForm's operation takes ownership/disposes it.
 
+            var progressForm = RebuildProgressForm.RunModal(this, "Rebuilding Table...",
+                (progress, cancellationToken) => TableRebuilder.Rebuild(
+                    tableToRebuild, tempTableName: null, useMemoryStreams: useMemoryStreams,
+                    progress: progress, cancellationToken: cancellationToken));
+
+            table = new ParadoxTableFile(dbFilePath);
+            SetupGrid();
+
+            if (progressForm.WasCancelled)
+            {
+                MessageBox.Show(this, "Table rebuild was cancelled.", "Table Rebuild",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else if (progressForm.Error != null)
+            {
+                MessageBox.Show(this, "Rebuild failed:\r\n" + progressForm.Error.Message, "Table Rebuild",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else
+            {
+                var result = progressForm.Result;
                 MessageBox.Show(this,
                     string.Format("Rebuild complete. {0} record(s) migrated across {1} file(s).",
                         result.RecordsMigrated, result.RebuiltFiles.Count),
                     "Table Rebuild", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                // TableRebuilder.Rebuild disposes the table even on failure paths that
-                // already got past opening it; reopen so this editor window stays usable.
-                table = new ParadoxTableFile(dbFilePath);
-                SetupGrid();
-
-                MessageBox.Show(this, "Rebuild failed:\r\n" + ex.Message, "Table Rebuild",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

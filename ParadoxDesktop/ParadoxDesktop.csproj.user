@@ -11,6 +11,9 @@
     <Compile Update="ParadoxDesktopMainForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Update="RebuildProgressForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Update="SqlEditorForm.cs">
       <SubType>Form</SubType>
     </Compile>
