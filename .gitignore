@@ -59,3 +59,4 @@ bin/
 obj/
 *.LCK
 ParadoxTest/SqlRunner.local.config.example
+/.github

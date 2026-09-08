@@ -92,7 +92,9 @@ namespace ParadoxTest
                 string dataRoot = args.Length > 1 ? args[1] : null;
                 int maxTables = args.Length > 2 && int.TryParse(args[2], out var mt) ? mt : 12;
                 string filter = args.Length > 3 ? args[3] : null;
+#if NET10_0_OR_GREATER || NETFRAMEWORK
                 Trace.Listeners.Add(new ConsoleTraceListener());
+#endif
                 CorpusTest.Run(dataRoot, maxTables, filter);
                 return;
             }

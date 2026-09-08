@@ -179,6 +179,6 @@ namespace ParadoxDesktop
 
         public void Paste() => sqlTextBox.Paste();
 
-        public new void SelectAll() => sqlTextBox.SelectAll();
+        public void SelectAll() => sqlTextBox.SelectAll();
     }
 }
