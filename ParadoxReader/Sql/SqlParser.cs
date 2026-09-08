@@ -97,6 +97,13 @@ namespace ParadoxReader.Sql
             else
             {
                 stmt.Columns = ParseColumnList();
+                if (stmt.Columns.Count == 1 && stmt.Columns[0] == "*")
+                {
+                    // Alias-qualified star (e.g. 'A.*') is equivalent to a bare '*'
+                    // since only single-table statements are supported.
+                    stmt.Columns = null;
+                    stmt.IsSelectStar = true;
+                }
             }
 
             ExpectKeyword("FROM");
@@ -283,6 +290,13 @@ namespace ParadoxReader.Sql
                     var second = Current.Text;
                     pos++;
                     return second; // discard the alias prefix
+                }
+                if (Current.Type == SqlTokenType.Star)
+                {
+                    // alias.* -- since only single-table statements are supported,
+                    // this is equivalent to a bare '*'.
+                    pos++;
+                    return "*";
                 }
                 throw new SqlParseException($"Expected column name after '.' at position {Current.Position}");
             }
