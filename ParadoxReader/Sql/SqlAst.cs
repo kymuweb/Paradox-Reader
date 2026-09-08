@@ -10,10 +10,18 @@ namespace ParadoxReader.Sql
 
     internal sealed class SelectStatement : SqlStatement
     {
-        /// <summary>Column names to project, or null/empty for "SELECT *".</summary>
-        public List<string> Columns;
+        /// <summary>
+        /// Columns to project, or null/empty for a bare "SELECT *" (see
+        /// <see cref="IsSelectStar"/>). Individual entries may themselves be a
+        /// star (optionally alias-qualified, e.g. "A.*") which is expanded to
+        /// that table's full field list at execution time.
+        /// </summary>
+        public List<SqlColumnRef> Columns;
+        /// <summary>True for a bare "SELECT *" (no alias prefix), before any FROM/JOIN table aliases are known.</summary>
         public bool IsSelectStar;
         public TableRef Table;
+        /// <summary>Additional tables joined to <see cref="Table"/>, in left-to-right order. Null/empty for a single-table SELECT.</summary>
+        public List<JoinClause> Joins;
         public WhereExpr Where;
     }
 
@@ -48,6 +56,37 @@ namespace ParadoxReader.Sql
         public string Path;
         /// <summary>Optional alias, e.g. the "T" in "'table.db' T".</summary>
         public string Alias;
+    }
+
+    /// <summary>
+    /// A (possibly alias-qualified) column reference, e.g. "A.ID", "ID", or
+    /// "A.*" (ColumnName == "*"). Used in the SELECT column list and JOIN ON
+    /// clauses, where the alias must be preserved to disambiguate columns
+    /// across multiple joined tables.
+    /// </summary>
+    internal sealed class SqlColumnRef
+    {
+        public string TableAlias;
+        public string ColumnName;
+        public bool IsStar => ColumnName == "*";
+        public override string ToString() => TableAlias == null ? ColumnName : $"{TableAlias}.{ColumnName}";
+    }
+
+    internal enum JoinType { Inner, Left }
+
+    /// <summary>An equality condition ("alias.col = alias.col") within a JOIN's ON clause.</summary>
+    internal sealed class JoinEquality
+    {
+        public SqlColumnRef Left;
+        public SqlColumnRef Right;
+    }
+
+    internal sealed class JoinClause
+    {
+        public JoinType Type;
+        public TableRef Table;
+        /// <summary>AND-combined equality conditions from the ON clause (at least one).</summary>
+        public List<JoinEquality> Conditions;
     }
 
     internal sealed class SqlAssignment
@@ -88,6 +127,8 @@ namespace ParadoxReader.Sql
 
     internal sealed class WhereComparison : WhereExpr
     {
+        /// <summary>Optional table alias prefix (e.g. the "A" in "A.ID = ..."), used to disambiguate columns across joined tables. Null for unqualified references.</summary>
+        public string TableAlias;
         public string ColumnName;
         public ParadoxCompareOperator Operator;
         public SqlValue Value;

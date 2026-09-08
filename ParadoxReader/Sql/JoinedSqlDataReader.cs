@@ -5,32 +5,37 @@ using System.Data;
 namespace ParadoxReader.Sql
 {
     /// <summary>
-    /// IDataReader over a sequence of ParadoxRecord, projecting only the
-    /// requested column indices (or all columns for "SELECT *"). Column
-    /// metadata (names/types) comes from the parent ParadoxFile, but this
-    /// reader's ordinal positions match the projection order, not the
-    /// underlying table's field order.
+    /// IDataReader over the projected results of a multi-table SELECT with
+    /// one or more JOINs. Each result row is an array of <see cref="ParadoxRecord"/>
+    /// (or null, for the "unmatched" side of a LEFT JOIN), one per table in
+    /// FROM/JOIN order; the projected column list maps each output ordinal to
+    /// a (table index, field index) pair.
     /// </summary>
-    internal sealed class SqlDataReader : IDataReader
+    internal sealed class JoinedSqlDataReader : IDataReader
     {
-        private readonly ParadoxFile file;
-        private readonly int[] columnIndices; // maps projected ordinal -> table field index
+        /// <summary>Per-table field metadata, in FROM/JOIN order.</summary>
+        private readonly ParadoxFile[] tables;
+
+        /// <summary>For each projected output column: which table (index into <see cref="tables"/>) and field index within it.</summary>
+        private readonly int[] projectionTableIndex;
+        private readonly int[] projectionFieldIndex;
         private readonly string[] columnNames;
-        private readonly IEnumerator<ParadoxRecord> enumerator;
 
-        public ParadoxRecord CurrentRecord => enumerator.Current;
+        private readonly IEnumerator<ParadoxRecord[]> enumerator;
 
-        public SqlDataReader(ParadoxFile file, IEnumerable<ParadoxRecord> rows, int[] columnIndices)
+        public JoinedSqlDataReader(ParadoxFile[] tables, IEnumerable<ParadoxRecord[]> rows,
+            int[] projectionTableIndex, int[] projectionFieldIndex, string[] columnNames)
         {
-            this.file = file;
-            this.columnIndices = columnIndices;
-            this.columnNames = new string[columnIndices.Length];
-            for (int i = 0; i < columnIndices.Length; i++)
-                this.columnNames[i] = file.FieldNames[columnIndices[i]];
+            this.tables = tables;
+            this.projectionTableIndex = projectionTableIndex;
+            this.projectionFieldIndex = projectionFieldIndex;
+            this.columnNames = columnNames;
             this.enumerator = rows.GetEnumerator();
         }
 
-        public int FieldCount => columnIndices.Length;
+        private ParadoxRecord[] CurrentRow => enumerator.Current;
+
+        public int FieldCount => projectionTableIndex.Length;
 
         public string GetName(int i) => columnNames[i];
 
@@ -42,11 +47,16 @@ namespace ParadoxReader.Sql
             return -1;
         }
 
-        public object GetValue(int i) => CurrentRecord.DataValues[columnIndices[i]];
+        public object GetValue(int i)
+        {
+            var rec = CurrentRow[projectionTableIndex[i]];
+            if (rec == null) return null; // unmatched side of a LEFT JOIN
+            return rec.DataValues[projectionFieldIndex[i]];
+        }
 
-        public Type GetFieldType(int i) => SqlFieldTypeMapper.GetFieldType(file.FieldTypes[columnIndices[i]]);
+        public Type GetFieldType(int i) => SqlFieldTypeMapper.GetFieldType(tables[projectionTableIndex[i]].FieldTypes[projectionFieldIndex[i]]);
 
-        public string GetDataTypeName(int i) => "pxf" + file.FieldTypes[columnIndices[i]].fType;
+        public string GetDataTypeName(int i) => "pxf" + tables[projectionTableIndex[i]].FieldTypes[projectionFieldIndex[i]].fType;
 
         public bool GetBoolean(int i) => (bool)GetValue(i);
         public byte GetByte(int i) => (byte)GetValue(i);
@@ -75,11 +85,9 @@ namespace ParadoxReader.Sql
         public object this[string name] => GetValue(GetOrdinal(name));
 
         public void Close() { }
+
         public DataTable GetSchemaTable()
         {
-            // Standard ADO.NET schema table shape (subset of columns commonly
-            // consumed by DataTable.Load(IDataReader) and generic data-bound
-            // UI controls that call IDataReader.GetSchemaTable()).
             var schema = new DataTable("SchemaTable");
             schema.Columns.Add("ColumnName", typeof(string));
             schema.Columns.Add("ColumnOrdinal", typeof(int));
@@ -90,23 +98,26 @@ namespace ParadoxReader.Sql
             schema.Columns.Add("IsKey", typeof(bool));
             schema.Columns.Add("IsAutoIncrement", typeof(bool));
 
-            for (int i = 0; i < columnIndices.Length; i++)
+            for (int i = 0; i < projectionTableIndex.Length; i++)
             {
-                var fieldInfo = file.FieldTypes[columnIndices[i]];
+                var table = tables[projectionTableIndex[i]];
+                var fieldIndex = projectionFieldIndex[i];
+                var fieldInfo = table.FieldTypes[fieldIndex];
                 var row = schema.NewRow();
                 row["ColumnName"] = columnNames[i];
                 row["ColumnOrdinal"] = i;
                 row["ColumnSize"] = fieldInfo.fSize;
                 row["DataType"] = GetFieldType(i);
-                row["AllowDBNull"] = true; // Paradox fields are nullable except where enforced by validity checks not tracked here
+                row["AllowDBNull"] = true;
                 row["IsReadOnly"] = false;
-                row["IsKey"] = columnIndices[i] < file.primaryKeyFields;
+                row["IsKey"] = fieldIndex < table.primaryKeyFields;
                 row["IsAutoIncrement"] = fieldInfo.fType == ParadoxFieldTypes.AutoInc;
                 schema.Rows.Add(row);
             }
 
             return schema;
         }
+
         public bool NextResult() => false;
         public bool Read() => enumerator.MoveNext();
 

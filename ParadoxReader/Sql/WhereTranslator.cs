@@ -74,9 +74,10 @@ namespace ParadoxReader.Sql
 
         /// <summary>
         /// Same ordinal string comparison rule as <see cref="ParadoxCondition.Compare"/>
-        /// uses, so full-scan filtering agrees with index-based filtering.
+        /// uses, so full-scan filtering agrees with index-based filtering. Also
+        /// used by join-equality matching in <see cref="ParadoxSqlExecutor"/>.
         /// </summary>
-        private static int CompareValues(object a, object b)
+        internal static int CompareValues(object a, object b)
         {
             if (a is string sa && b is string sb)
                 return string.CompareOrdinal(sa, sb);

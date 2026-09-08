@@ -137,15 +137,222 @@ namespace ParadoxReader.Sql
 
         private IDataReader ExecuteSelect(SelectStatement stmt, IDictionary<string, object> parameters)
         {
+            if (stmt.Joins == null || stmt.Joins.Count == 0)
+                return ExecuteSingleTableSelect(stmt, parameters);
+
+            return ExecuteJoinedSelect(stmt, parameters);
+        }
+
+        private IDataReader ExecuteSingleTableSelect(SelectStatement stmt, IDictionary<string, object> parameters)
+        {
             var table = ResolveTable(stmt.Table);
 
             int[] columnIndices = stmt.IsSelectStar
                 ? Enumerable.Range(0, table.FieldTypes.Length).ToArray()
-                : stmt.Columns.Select(c => WhereTranslator.ResolveFieldIndex(table, c)).ToArray();
+                : stmt.Columns.Select(c => WhereTranslator.ResolveFieldIndex(table, c.ColumnName)).ToArray();
 
             IEnumerable<ParadoxRecord> rows = ExecuteWhereRead(table, stmt.Where, parameters);
 
             return new SqlDataReader(table, rows, columnIndices);
+        }
+
+        // ----------------------------------------------------------------
+        // SELECT ... JOIN
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Executes a multi-table SELECT with one or more INNER/LEFT JOINs.
+        /// Joins are always evaluated left-to-right as nested-loop equality
+        /// joins over each table's full contents (no index acceleration),
+        /// which is sufficient for the small/medium tables this library
+        /// targets; see remarks on WhereTranslator for why full-scan
+        /// filtering is already the safe default for single-table WHERE.
+        /// </summary>
+        private IDataReader ExecuteJoinedSelect(SelectStatement stmt, IDictionary<string, object> parameters)
+        {
+            // aliasToTableIndex maps each FROM/JOIN alias (or bare table path,
+            // if unaliased) to its position in `tables`/`rows`.
+            var tables = new List<ParadoxFile>();
+            var aliasToTableIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            var baseTable = ResolveTable(stmt.Table);
+            tables.Add(baseTable);
+            RegisterAlias(aliasToTableIndex, stmt.Table, 0);
+
+            // rows accumulates the joined result set as we process each JOIN
+            // clause in order; each element is one row across all tables
+            // processed so far, with null entries for the unmatched side of a
+            // LEFT JOIN.
+            IEnumerable<ParadoxRecord[]> rows = baseTable.Enumerate().Select(r => new[] { r });
+
+            for (int j = 0; j < stmt.Joins.Count; j++)
+            {
+                var join = stmt.Joins[j];
+                var joinTable = ResolveTable(join.Table);
+                int joinTableIndex = tables.Count;
+                tables.Add(joinTable);
+                RegisterAlias(aliasToTableIndex, join.Table, joinTableIndex);
+
+                var conditions = join.Conditions
+                    .Select(c => ResolveJoinEquality(c, aliasToTableIndex, tables))
+                    .ToList();
+
+                var allJoinRows = joinTable.Enumerate().ToList(); // materialized once per JOIN clause for the nested-loop scan
+                rows = JoinRows(rows, allJoinRows, conditions, join.Type, joinTableIndex);
+            }
+
+            if (stmt.Where != null)
+            {
+                var predicate = JoinWhereTranslator.ToPredicate(stmt.Where, aliasToTableIndex, tables, parameters);
+                rows = rows.Where(predicate);
+            }
+
+            var tablesArray = tables.ToArray();
+            List<(int tableIndex, int fieldIndex, string name)> projection = BuildJoinProjection(stmt, aliasToTableIndex, tablesArray);
+
+            return new JoinedSqlDataReader(
+                tablesArray,
+                rows,
+                projection.Select(p => p.tableIndex).ToArray(),
+                projection.Select(p => p.fieldIndex).ToArray(),
+                projection.Select(p => p.name).ToArray());
+        }
+
+        private static void RegisterAlias(Dictionary<string, int> aliasToTableIndex, TableRef tableRef, int tableIndex)
+        {
+            // Register both the explicit alias (if any) and the bare table
+            // path/name, so unqualified single-table-style references and
+            // "path.column" references (without an alias) keep working.
+            if (!string.IsNullOrEmpty(tableRef.Alias))
+                aliasToTableIndex[tableRef.Alias] = tableIndex;
+            aliasToTableIndex[tableRef.Path] = tableIndex;
+        }
+
+        private static (int tableIndex, int fieldIndex) ResolveQualifiedColumn(SqlColumnRef col,
+            Dictionary<string, int> aliasToTableIndex, List<ParadoxFile> tables)
+        {
+            if (col.TableAlias == null)
+            {
+                if (tables.Count != 1)
+                    throw new SqlExecutionException($"Column '{col.ColumnName}' must be qualified with a table alias in a multi-table statement.");
+                return (0, WhereTranslator.ResolveFieldIndex(tables[0], col.ColumnName));
+            }
+
+            if (!aliasToTableIndex.TryGetValue(col.TableAlias, out int tableIndex))
+                throw new SqlExecutionException($"Unknown table alias '{col.TableAlias}'.");
+
+            return (tableIndex, WhereTranslator.ResolveFieldIndex(tables[tableIndex], col.ColumnName));
+        }
+
+        private static ((int tableIndex, int fieldIndex) Left, (int tableIndex, int fieldIndex) Right) ResolveJoinEquality(
+            JoinEquality eq, Dictionary<string, int> aliasToTableIndex, List<ParadoxFile> tables)
+        {
+            var left = ResolveQualifiedColumn(eq.Left, aliasToTableIndex, tables);
+            var right = ResolveQualifiedColumn(eq.Right, aliasToTableIndex, tables);
+            return (left, right);
+        }
+
+        /// <summary>
+        /// Nested-loop equality join: for each accumulated left-hand row, finds
+        /// all matching right-hand records (comparing every condition's field
+        /// pair for equality) and yields one combined row per match. For a
+        /// LEFT JOIN, a left-hand row with no matches yields a single row with
+        /// a null right-hand slot.
+        /// </summary>
+        private static IEnumerable<ParadoxRecord[]> JoinRows(IEnumerable<ParadoxRecord[]> leftRows,
+            List<ParadoxRecord> rightTableRows,
+            List<((int tableIndex, int fieldIndex) Left, (int tableIndex, int fieldIndex) Right)> conditions,
+            JoinType joinType, int joinTableIndex)
+        {
+            foreach (var leftRow in leftRows)
+            {
+                bool matched = false;
+                foreach (var rightRec in rightTableRows)
+                {
+                    bool allMatch = true;
+                    foreach (var cond in conditions)
+                    {
+                        // Exactly one side of each condition refers to the newly-joined
+                        // table (the other refers to an already-accumulated table);
+                        // figure out which is which so this works regardless of ON clause ordering.
+                        object leftValue, rightValue;
+                        if (cond.Left.tableIndex == joinTableIndex)
+                        {
+                            leftValue = rightRec.DataValues[cond.Left.fieldIndex];
+                            rightValue = leftRow[cond.Right.tableIndex]?.DataValues[cond.Right.fieldIndex];
+                        }
+                        else if (cond.Right.tableIndex == joinTableIndex)
+                        {
+                            leftValue = rightRec.DataValues[cond.Right.fieldIndex];
+                            rightValue = leftRow[cond.Left.tableIndex]?.DataValues[cond.Left.fieldIndex];
+                        }
+                        else
+                        {
+                            throw new SqlExecutionException("JOIN ON condition must reference the joined table.");
+                        }
+
+                        if (leftValue == null || rightValue == null || WhereTranslator.CompareValues(leftValue, rightValue) != 0)
+                        {
+                            allMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (allMatch)
+                    {
+                        matched = true;
+                        var combined = new ParadoxRecord[joinTableIndex + 1];
+                        Array.Copy(leftRow, combined, leftRow.Length);
+                        combined[joinTableIndex] = rightRec;
+                        yield return combined;
+                    }
+                }
+
+                if (!matched && joinType == JoinType.Left)
+                {
+                    var combined = new ParadoxRecord[joinTableIndex + 1];
+                    Array.Copy(leftRow, combined, leftRow.Length);
+                    combined[joinTableIndex] = null;
+                    yield return combined;
+                }
+            }
+        }
+
+        private List<(int tableIndex, int fieldIndex, string name)> BuildJoinProjection(SelectStatement stmt,
+            Dictionary<string, int> aliasToTableIndex, ParadoxFile[] tables)
+        {
+            var projection = new List<(int, int, string)>();
+
+            if (stmt.IsSelectStar)
+            {
+                // Bare 'SELECT *' with a JOIN: project every table's every field, in FROM/JOIN order.
+                for (int t = 0; t < tables.Length; t++)
+                    for (int f = 0; f < tables[t].FieldTypes.Length; f++)
+                        projection.Add((t, f, tables[t].FieldNames[f]));
+                return projection;
+            }
+
+            foreach (var col in stmt.Columns)
+            {
+                if (col.IsStar)
+                {
+                    if (col.TableAlias == null)
+                        throw new SqlExecutionException("'*' must be qualified with a table alias (e.g. 'A.*') in a multi-table statement.");
+                    if (!aliasToTableIndex.TryGetValue(col.TableAlias, out int tableIndex))
+                        throw new SqlExecutionException($"Unknown table alias '{col.TableAlias}'.");
+
+                    var table = tables[tableIndex];
+                    for (int f = 0; f < table.FieldTypes.Length; f++)
+                        projection.Add((tableIndex, f, table.FieldNames[f]));
+                }
+                else
+                {
+                    var (tableIndex, fieldIndex) = ResolveQualifiedColumn(col, aliasToTableIndex, tables.ToList());
+                    projection.Add((tableIndex, fieldIndex, tables[tableIndex].FieldNames[fieldIndex]));
+                }
+            }
+
+            return projection;
         }
 
         /// <summary>
