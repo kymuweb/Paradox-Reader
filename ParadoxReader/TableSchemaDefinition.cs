@@ -43,14 +43,16 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Creates a memo/blob field definition from a user-facing "leader size"
+        /// Creates a blob field definition from a user-facing "leader size"
         /// (the number of bytes that can be stored directly inline in the .DB
         /// record before the value must be externalized to the .MB file) -
         /// mirroring how SQL's <c>BLOB(n, ...)</c> DDL syntax and the BDE UI
-        /// both express memo/blob field sizes, and how a table designer would
+        /// both express blob field sizes, and how a table designer would
         /// naturally think of "how much can I write directly into the record".
+        /// Memo is simply a blob sub-type (MemoBLOb/FmtMemoBLOb), so this same
+        /// factory covers both memo and non-memo blob fields.
         ///
-        /// On disk, a memo/blob field's fSize is actually <paramref name="leaderSize"/>
+        /// On disk, a blob field's fSize is actually <paramref name="leaderSize"/>
         /// + 10 (the trailing 10 bytes are the blob pointer: offset+index (4),
         /// size (4), mod_nr (2) - see ParadoxBlobFile/ParadoxRecord for details).
         /// This factory hides that +10 adjustment so callers never need to
@@ -61,14 +63,35 @@ namespace ParadoxReader
         /// <param name="leaderSize">
         /// The inline byte capacity, matching the "n" in SQL's BLOB(n, ...) syntax.
         /// Must leave room for the 10-byte pointer, i.e. leaderSize + 10 &lt;= 255.
+        /// Note: per Embarcadero/BDE documentation, Paradox BLOB(length, type) columns
+        /// are only officially documented to support length between 0 and 240 (unlike
+        /// dBASE tables, which allow up to 32,767). The reason for the 240 cap - rather
+        /// than the 245 that would otherwise fit the 10-byte pointer within a byte-sized
+        /// fSize - is not clear from available documentation/reference captures, so it is
+        /// not enforced here; callers should be aware real BDE tooling may reject or
+        /// behave differently for leaderSize values between 241 and 245.
         /// </param>
         /// <param name="isPrimaryKey">True if this field is (part of) the primary key.</param>
-        public static TableFieldDefinition CreateMemoField(string name, ParadoxFieldTypes type, int leaderSize, bool isPrimaryKey = false)
+        public static TableFieldDefinition CreateBlobField(string name, ParadoxFieldTypes type, int leaderSize, bool isPrimaryKey = false)
         {
             if (leaderSize < 0 || leaderSize + 10 > 255)
                 throw new ArgumentOutOfRangeException(nameof(leaderSize), leaderSize, "leaderSize must be between 0 and 245 (leaderSize + 10 must fit in a byte).");
 
             return new TableFieldDefinition(name, type, (byte)(leaderSize + 10), isPrimaryKey);
+        }
+
+        /// <summary>
+        /// True if <paramref name="type"/> is one of the blob-capable field types
+        /// (MemoBLOb, FmtMemoBLOb, BLOb, OLE, or Graphic), whose on-disk fSize
+        /// includes a 10-byte pointer in addition to the user-facing leader size.
+        /// </summary>
+        public static bool IsBlobType(ParadoxFieldTypes type)
+        {
+            return type == ParadoxFieldTypes.MemoBLOb
+                || type == ParadoxFieldTypes.FmtMemoBLOb
+                || type == ParadoxFieldTypes.BLOb
+                || type == ParadoxFieldTypes.OLE
+                || type == ParadoxFieldTypes.Graphic;
         }
     }
 

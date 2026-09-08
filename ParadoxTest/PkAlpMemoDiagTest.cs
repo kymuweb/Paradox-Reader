@@ -52,7 +52,7 @@ namespace ParadoxTest
                 {
                     new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
                     new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                    TableFieldDefinition.CreateMemoField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
+                    TableFieldDefinition.CreateBlobField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
                 }
             };
 

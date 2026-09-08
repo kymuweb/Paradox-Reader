@@ -265,10 +265,10 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        // CreateMemoField takes the leader (inline byte) size directly,
+                        // CreateBlobField takes the leader (inline byte) size directly,
                         // matching the "20" in SQL's BLOB(20,1) DDL below - the on-disk
                         // fSize=30 (leader+10 pointer bytes) is computed automatically.
-                        TableFieldDefinition.CreateMemoField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
+                        TableFieldDefinition.CreateBlobField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
                     }
                 },
                 SqlRunnerDdl = new List<string>
@@ -290,7 +290,7 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        TableFieldDefinition.CreateMemoField("FILEVAL", ParadoxFieldTypes.BLOb, 240),
+                        TableFieldDefinition.CreateBlobField("FILEVAL", ParadoxFieldTypes.BLOb, 240),
                     }
                 },
                 SqlRunnerDdl = new List<string>
@@ -312,7 +312,7 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        TableFieldDefinition.CreateMemoField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
+                        TableFieldDefinition.CreateBlobField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
                     }
                 },
                 SqlRunnerDdl = new List<string>
@@ -334,7 +334,7 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        TableFieldDefinition.CreateMemoField("FILEVAL", ParadoxFieldTypes.BLOb, 240),
+                        TableFieldDefinition.CreateBlobField("FILEVAL", ParadoxFieldTypes.BLOb, 240),
                     }
                 },
                 SqlRunnerDdl = new List<string>

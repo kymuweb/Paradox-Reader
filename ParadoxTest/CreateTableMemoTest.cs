@@ -70,7 +70,7 @@ namespace ParadoxTest
                     new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
                     // Leader=20 inline bytes (fSize=30 on disk), matching SQLRunner's
                     // BLOB(20,1) DDL below.
-                    TableFieldDefinition.CreateMemoField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
+                    TableFieldDefinition.CreateBlobField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
                 }
             };
 

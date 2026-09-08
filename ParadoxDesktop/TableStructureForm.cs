@@ -93,6 +93,8 @@ namespace ParadoxDesktop
         {
             editorPanel.Visible = false;
             indexButtonsPanel.Visible = false;
+            tableNameLabel.Visible = false;
+            tableNameTextBox.Visible = false;
             okButton.Visible = false;
             cancelButton.Text = "Close";
             cancelButton.DialogResult = DialogResult.Cancel;
@@ -148,7 +150,14 @@ namespace ParadoxDesktop
                 var f = Schema.Fields[i];
                 var item = new ListViewItem(f.Name);
                 item.SubItems.Add(f.Type.ToString());
-                item.SubItems.Add(f.Size.ToString());
+                // Blob-capable fields (including memo, a blob sub-type) store the
+                // on-disk fSize, which includes a 10-byte pointer (offset+index,
+                // size, mod_nr) in addition to the inline "leader" bytes. Users
+                // think of the size as the leader/BLOB(n,...) value (as SQL/BDE
+                // express it), so subtract the pointer overhead back out for
+                // display purposes only.
+                int displaySize = TableFieldDefinition.IsBlobType(f.Type) ? Math.Max(0, f.Size - 10) : f.Size;
+                item.SubItems.Add(displaySize.ToString());
                 item.SubItems.Add(f.IsPrimaryKey ? "Yes" : string.Empty);
                 item.Tag = f;
                 fieldsListView.Items.Add(item);
@@ -196,7 +205,10 @@ namespace ParadoxDesktop
             addUpdateFieldButton.Text = "Update Field";
             fieldNameTextBox.Text = field.Name;
             fieldTypeComboBox.SelectedItem = field.Type;
-            fieldSizeNumericUpDown.Value = Math.Max(fieldSizeNumericUpDown.Minimum, Math.Min(fieldSizeNumericUpDown.Maximum, field.Size));
+            // Blob-capable fields (including memo) are edited in leader-size terms,
+            // matching the on-disk fSize minus the 10-byte pointer overhead.
+            int editSize = TableFieldDefinition.IsBlobType(field.Type) ? Math.Max(0, field.Size - 10) : field.Size;
+            fieldSizeNumericUpDown.Value = Math.Max(fieldSizeNumericUpDown.Minimum, Math.Min(fieldSizeNumericUpDown.Maximum, editSize));
             fieldSizeNumericUpDown.Enabled = !ParadoxFieldTypeSizes.GetFixedSize(field.Type).HasValue;
             fieldPrimaryKeyCheckBox.Checked = field.IsPrimaryKey;
             removeFieldButton.Enabled = true;
@@ -213,8 +225,9 @@ namespace ParadoxDesktop
 
             var type = (ParadoxFieldTypes)fieldTypeComboBox.SelectedItem;
             byte? fixedSize = ParadoxFieldTypeSizes.GetFixedSize(type);
-            byte size = fixedSize ?? (byte)fieldSizeNumericUpDown.Value;
+            int enteredSize = fixedSize ?? (int)fieldSizeNumericUpDown.Value;
             bool isPrimaryKey = fieldPrimaryKeyCheckBox.Checked;
+            bool isBlob = TableFieldDefinition.IsBlobType(type);
 
             var existing = SelectedField;
             bool duplicateName = Schema.Fields.Any(f =>
@@ -225,16 +238,48 @@ namespace ParadoxDesktop
                 return;
             }
 
-            if (existing != null)
+            // Blob-capable fields (including memo) are entered in leader-size terms
+            // (matching SQL's BLOB(n, ...) syntax); TableFieldDefinition.CreateBlobField
+            // converts that to the on-disk fSize (leaderSize + 10 pointer bytes).
+            if (isBlob)
             {
-                existing.Name = name;
-                existing.Type = type;
-                existing.Size = size;
-                existing.IsPrimaryKey = isPrimaryKey;
+                TableFieldDefinition blobField;
+                try
+                {
+                    blobField = TableFieldDefinition.CreateBlobField(name, type, enteredSize, isPrimaryKey);
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    MessageBox.Show(this, ex.Message, "Field", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (existing != null)
+                {
+                    existing.Name = blobField.Name;
+                    existing.Type = blobField.Type;
+                    existing.Size = blobField.Size;
+                    existing.IsPrimaryKey = blobField.IsPrimaryKey;
+                }
+                else
+                {
+                    Schema.Fields.Add(blobField);
+                }
             }
             else
             {
-                Schema.Fields.Add(new TableFieldDefinition(name, type, size, isPrimaryKey));
+                byte size = (byte)enteredSize;
+                if (existing != null)
+                {
+                    existing.Name = name;
+                    existing.Type = type;
+                    existing.Size = size;
+                    existing.IsPrimaryKey = isPrimaryKey;
+                }
+                else
+                {
+                    Schema.Fields.Add(new TableFieldDefinition(name, type, size, isPrimaryKey));
+                }
             }
 
             Schema.ReorderPrimaryKeyFieldsFirst();
