@@ -208,6 +208,19 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "createtablememotest")
+            {
+                // Usage: ParadoxTest.exe createtablememotest
+                // Focused memo-value-set regression: drives both "ours"
+                // (ParadoxReader) and "sqlrunner" (real BDE) through CREATE
+                // TABLE -> INSERT (blank memo) -> UPDATE NOTES to 19/20/21-char
+                // values, snapshotting and byte-comparing every stage to find
+                // exactly where/when the two diverge (e.g. when the .MB file
+                // is first touched at the inline/leader size boundary).
+                CreateTableMemoTest.Run();
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "pkalpmemodiagtest")
             {
                 // Usage: ParadoxTest.exe pkalpmemodiagtest
