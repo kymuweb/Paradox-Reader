@@ -23,10 +23,7 @@ namespace ParadoxDesktop
         {
             InitializeComponent();
 
-            editToolStrip.Visible = false;
-            recordToolStrip.Visible = false;
-            tableToolStrip.Visible = false;
-            sqlToolStrip.Visible = false;
+            UpdateToolbarVisibility(false, false, false, false);
         }
 
         private TableEditorForm ActiveTableEditor => ActiveMdiChild as TableEditorForm;
@@ -46,12 +43,51 @@ namespace ParadoxDesktop
 
             tableMenuItem.Enabled = tableActive;
             recordMenuItem.Enabled = tableActive;
+            editModeToolButton.Checked = tableActive && ActiveTableEditor.EditModeEnabled;
             sqlMenuItem.Enabled = sqlActive;
 
-            editToolStrip.Visible = anyActive;
-            recordToolStrip.Visible = tableActive;
-            tableToolStrip.Visible = tableActive;
-            sqlToolStrip.Visible = sqlActive;
+            UpdateToolbarVisibility(anyActive, tableActive, tableActive, sqlActive);
+        }
+
+        // mainToolStrip holds four contextual groups of buttons, in order:
+        // Edit (always shown when any MDI child is active), Record (table
+        // editors only), Table (table editors only), and SQL (SQL editor
+        // only). "|" labels visually separate every button; a separator is
+        // only shown when both its neighboring groups are visible, so we
+        // never end up with a dangling "|" at the start/end of the row.
+        private void UpdateToolbarVisibility(bool editVisible, bool recordVisible, bool tableVisible, bool sqlVisible)
+        {
+            undoToolButton.Visible = editVisible;
+            pipe1.Visible = editVisible;
+            redoToolButton.Visible = editVisible;
+            pipe2.Visible = editVisible;
+            cutToolButton.Visible = editVisible;
+            pipe3.Visible = editVisible;
+            copyToolButton.Visible = editVisible;
+            pipe4.Visible = editVisible;
+            pasteToolButton.Visible = editVisible;
+            pipe5.Visible = editVisible;
+            selectAllToolButton.Visible = editVisible;
+
+            insertRecordToolButton.Visible = recordVisible;
+            pipe9.Visible = recordVisible;
+            deleteRecordToolButton.Visible = recordVisible;
+            pipe7.Visible = recordVisible;
+            editModeToolButton.Visible = recordVisible;
+            pipe8.Visible = recordVisible;
+            modifyMemoToolButton.Visible = recordVisible;
+
+            infoStructureToolButton.Visible = tableVisible;
+            pipe11.Visible = tableVisible;
+            modifyStructureToolButton.Visible = tableVisible;
+            pipe12.Visible = tableVisible;
+            tableRebuildToolButton.Visible = tableVisible;
+
+            runSqlToolButton.Visible = sqlVisible;
+
+            pipe6.Visible = editVisible && (recordVisible || tableVisible || sqlVisible);
+            pipe10.Visible = recordVisible && (tableVisible || sqlVisible);
+            pipe13.Visible = tableVisible && sqlVisible;
         }
 
         // ----------------------------------------------------------------
@@ -208,12 +244,14 @@ namespace ParadoxDesktop
             var editor = ActiveTableEditor;
             if (editor == null)
             {
+                editModeToolButton.Checked = false;
                 MessageBox.Show(this, "No table is currently open.", "Edit Mode",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             editor.ToggleEditMode();
+            editModeToolButton.Checked = editor.EditModeEnabled;
         }
 
         private void modifyMemoMenuItem_Click(object sender, EventArgs e)
