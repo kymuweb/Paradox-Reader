@@ -237,7 +237,17 @@ namespace ParadoxReader
                 w.Write((ushort)0);                  // 0x1E pxRootBlockId
                 w.Write((byte)0);                    // 0x20 pxLevelCount
                 w.Write((short)fieldCount);          // 0x21 FieldCount
-                w.Write((short)primaryKeyCount);     // 0x23 primaryKeyFields
+                // primaryKeyFields (0x23): only meaningful on .DB and
+                // secondary-index (.Xnn/.XGn) files - real BDE-created .PX
+                // (primary index) files always have this == 0, even though
+                // every field in a .PX is itself a key field - confirmed via
+                // binary-patch/diff against a real SQLRunner-created
+                // PKONLY.PX (0x23 == 0x00 there vs our previous non-zero
+                // value equal to the key field count) and consistent with
+                // pxlibcpp's put_px_head(), which only sets primaryKeyFields
+                // for pxfFileTyp*SecIndex* file types, never for
+                // pxfFileTypPrimIndex.
+                w.Write((short)(fileType == ParadoxFileType.PxFile ? 0 : primaryKeyCount)); // 0x23 primaryKeyFields
                 // encryption1 (0x25) - real BDE .DB/.Xnn/.XGn files (no
                 // password) always have 0x00 0xFF 0x00 0xFF here, not zero;
                 // .PX/.YGn leave it zero when unencrypted (confirmed across
@@ -247,9 +257,32 @@ namespace ParadoxReader
                 w.Write(hasV4Header ? new byte[] { 0x00, 0xFF, 0x00, 0xFF } : new byte[4]); // 0x25 encryption1
                 w.Write((byte)0x4C);                 // 0x29 sortOrder
                 w.Write((byte)0);                    // 0x2A modifiedFlags2
-                w.Write(new byte[2]);                 // 0x2B-0x2C unknown2Bx2C
-                w.Write((byte)0);                    // 0x2D changeCount1
-                w.Write((byte)0);                    // 0x2E changeCount2
+                // unknown2Bx2C[1] (0x2C): CRITICAL, load-bearing field on
+                // .PX (primary index) files specifically - confirmed via
+                // binary-patch experimentation against a real
+                // BDE/SQLRunner-created PKONLY.PX fixture: leaving this at 0
+                // (our previous value) makes BDE intermittently fail to read
+                // the table (AccessViolationException), while patching it
+                // to 102 (0x66) fixes it. Matches pxlibcpp's put_px_head(),
+                // which stamps unknown2Bx2C[1]=102 unconditionally for
+                // pxfFileTypPrimIndex.
+                w.Write((byte)0);                                          // 0x2B unknown2Bx2C[0]
+                w.Write((byte)(fileType == ParadoxFileType.PxFile ? 102 : 0)); // 0x2C unknown2Bx2C[1]
+                // changeCount1/changeCount2 (0x2D/0x2E): CRITICAL, load-bearing
+                // fields for .DB files specifically - confirmed via
+                // binary-patch experimentation against a real BDE/SQLRunner
+                // -created PKONLY.DB (indexed) fixture: zeroing these two
+                // bytes causes the BDE engine to intermittently crash with
+                // an AccessViolationException on read. pxlibcpp's
+                // put_px_head() stamps changeCount1=2, changeCount2=1
+                // unconditionally for pxfFileTypIndexDB/pxfFileTypNonIndexDB
+                // (with a comment noting "set this to at least two until
+                // pxindex changes the header itself"), so this is a genuine
+                // structural requirement of .DB files, not a reserved/unused
+                // pointer field.
+                bool isDbFile = fileType == ParadoxFileType.DbFileIndexed || fileType == ParadoxFileType.DbFileNotIndexed;
+                w.Write((byte)(isDbFile ? 2 : 0));   // 0x2D changeCount1
+                w.Write((byte)(isDbFile ? 1 : 0));   // 0x2E changeCount2
                 w.Write((byte)0);                    // 0x2F unknown2F
                 w.Write(0);                          // 0x30 tableNamePtrPtr
                 w.Write(0);                          // 0x34 fldInfoPtr
