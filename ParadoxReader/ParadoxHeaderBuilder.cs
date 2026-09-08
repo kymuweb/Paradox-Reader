@@ -34,6 +34,11 @@ namespace ParadoxReader
         // this builder was producing.
         private const byte FileVersionId = 0x0B;
 
+        // A .PX/.XGn leaf entry's pointer overhead: blockNumber(2) +
+        // recordCount(2) + reserved(2). Mirrors PrimaryIndexFile.POINTER_SIZE
+        // / SecondaryIndexFile.POINTER_SIZE.
+        private const int PxPointerSize = 6;
+
         // BDE always creates fresh tables with maxTableSize = 2 (2048-byte
         // blocks), never 1 (1024-byte blocks), regardless of schema -
         // confirmed empirically across every real BDE-created fixture file
@@ -75,7 +80,22 @@ namespace ParadoxReader
         public static byte[] BuildPxHeader(TableSchemaDefinition schema)
         {
             var keyFields = schema.Fields.Where(f => f.IsPrimaryKey).ToList();
-            return BuildHeader(schema, ParadoxFileType.PxFile, keyFields, includeFieldNames: false);
+
+            // A .PX file's RecordSize is NOT simply the sum of its key
+            // fields' sizes - unlike a .DB file, where RecordSize is exactly
+            // the row data length, a .PX leaf entry is keyData + a 6-byte
+            // pointer (blockNumber(2) + recordCount(2) + reserved(2); see
+            // PrimaryIndexFile.POINTER_SIZE/entrySize). Real BDE-created .PX
+            // files' RecordSize header field reflects this entry size, not
+            // the raw key size - confirmed empirically (e.g. an INTEGER
+            // (4-byte) primary key produces RecordSize == 0x0A == 4 + 6, not
+            // 0x04). Using the raw key size here previously produced a
+            // RecordSize BDE apps like Paradox 7/Database Desktop reject as
+            // corrupt ("Older version (see context)").
+            int keyDataSize = keyFields.Sum(f => (int)f.Size);
+            int pxRecordSize = keyDataSize + PxPointerSize;
+
+            return BuildHeader(schema, ParadoxFileType.PxFile, keyFields, includeFieldNames: false, recordSizeOverride: pxRecordSize);
         }
 
         /// <summary>
@@ -160,15 +180,35 @@ namespace ParadoxReader
             ParadoxFileType fileType,
             List<TableFieldDefinition> fields,
             bool includeFieldNames,
-            int indexFieldNumber = -1)
+            int indexFieldNumber = -1,
+            int? recordSizeOverride = null)
         {
             using (var ms = new MemoryStream())
             using (var w = new BinaryWriter(ms, Encoding.ASCII))
             {
-                int recordSize = fields.Sum(f => (int)f.Size);
+                int recordSize = recordSizeOverride ?? fields.Sum(f => (int)f.Size);
                 int fieldCount = fields.Count;
                 int primaryKeyCount = fields.Count(f => f.IsPrimaryKey);
                 int nameFieldLength = FileVersionId >= 0x0C ? 261 : 79;
+
+                // V4 header - only present for file types ParadoxFile.ReadHeader
+                // actually reads one for (DB/.Xnn/.XGn - see its FileType
+                // check), NOT .PX or .YGn. Previously this was written
+                // unconditionally for every file type, which shifted every
+                // .PX/.YGn file's field definitions, table name, and field
+                // names 32 bytes out of position relative to what a real
+                // BDE reader expects - producing structurally corrupt .PX
+                // files that open fine via this library (which mirrors the
+                // same - consistent, but wrong - layout) but get rejected by
+                // real BDE apps like Paradox 7/Database Desktop as
+                // "Older version (see context)".
+                bool hasV4Header =
+                    fileType == ParadoxFileType.DbFileIndexed ||
+                    fileType == ParadoxFileType.DbFileNotIndexed ||
+                    fileType == ParadoxFileType.XnnFileInc ||
+                    fileType == ParadoxFileType.XnnFileNonInc ||
+                    fileType == ParadoxFileType.XgnFileInc ||
+                    fileType == ParadoxFileType.XgnFileNonInc;
 
                 w.Write((ushort)recordSize);       // 0x00 RecordSize
                 w.Write((ushort)0);                 // 0x02 headerSize (patched below)
@@ -179,17 +219,33 @@ namespace ParadoxReader
                 w.Write((ushort)0);                  // 0x0C fileBlocks
                 w.Write((ushort)0);                  // 0x0E firstBlock
                 w.Write((ushort)0);                  // 0x10 lastBlock
-                w.Write((ushort)0);                  // 0x12 unknown12x13
+                // 0x12-0x13: constant 0x0006 across every real BDE-created
+                // fixture (DB and PX alike, regardless of schema) -
+                // confirmed empirically.
+                w.Write((ushort)6);                  // 0x12 unknown12x13
                 w.Write((byte)0);                    // 0x14 modifiedFlags1
-                w.Write((byte)(indexFieldNumber >= 0 ? indexFieldNumber : (primaryKeyCount > 0 ? 1 : 0))); // 0x15 indexFieldNumber
+                // indexFieldNumber (0x15) is only meaningful on secondary
+                // index (.Xnn/.XGn) files - real BDE-created .DB files
+                // always have this byte == 0 regardless of primary-key
+                // count (confirmed against every fixture in ParadoxTest\data,
+                // all of which have a primary key yet 0x15 == 0x00).
+                // Previously this defaulted to 1 whenever the file had a
+                // primary key, incorrectly setting it on .DB/.PX files too.
+                w.Write((byte)(indexFieldNumber >= 0 ? indexFieldNumber : 0)); // 0x15 indexFieldNumber
                 w.Write(0);                          // 0x16 primaryIndexWorkspace
                 w.Write(0);                          // 0x1A unknownPtr1A
                 w.Write((ushort)0);                  // 0x1E pxRootBlockId
                 w.Write((byte)0);                    // 0x20 pxLevelCount
                 w.Write((short)fieldCount);          // 0x21 FieldCount
                 w.Write((short)primaryKeyCount);     // 0x23 primaryKeyFields
-                w.Write(0);                          // 0x25 encryption1
-                w.Write((byte)0);                    // 0x29 sortOrder
+                // encryption1 (0x25) - real BDE .DB/.Xnn/.XGn files (no
+                // password) always have 0x00 0xFF 0x00 0xFF here, not zero;
+                // .PX/.YGn leave it zero when unencrypted (confirmed across
+                // every ParadoxTest\data fixture). This library does not
+                // support password-protected tables, so this is always the
+                // unencrypted DB stamp / zero for PX.
+                w.Write(hasV4Header ? new byte[] { 0x00, 0xFF, 0x00, 0xFF } : new byte[4]); // 0x25 encryption1
+                w.Write((byte)0x4C);                 // 0x29 sortOrder
                 w.Write((byte)0);                    // 0x2A modifiedFlags2
                 w.Write(new byte[2]);                 // 0x2B-0x2C unknown2Bx2C
                 w.Write((byte)0);                    // 0x2D changeCount1
@@ -202,29 +258,57 @@ namespace ParadoxReader
                 w.Write((ushort)0);                  // 0x3A maxBlocks
                 w.Write((byte)0);                    // 0x3C unknown3C
                 w.Write((byte)0);                    // 0x3D auxPasswords
-                w.Write(new byte[2]);                 // 0x3E-0x3F unknown3Ex3F
+                // 0x3E-0x3F: real BDE .DB/.Xnn/.XGn files always have
+                // 0x0F1F here; .PX/.YGn files always have 0x0000 (same
+                // hasV4Header-gated pattern as 0x56-0x57).
+                w.Write(hasV4Header ? new byte[] { 0x1F, 0x0F } : new byte[2]); // 0x3E-0x3F unknown3Ex3F
                 w.Write(0);                          // 0x40 cryptInfoStartPtr
                 w.Write(0);                          // 0x44 cryptInfoEndPtr
                 w.Write((byte)0);                    // 0x48 unknown48
                 w.Write(0);                          // 0x49 autoIncVal
                 w.Write(new byte[2]);                 // 0x4D-0x4E unknown4Dx4E
                 w.Write((byte)0);                    // 0x4F indexUpdateRequired
+                // 0x50-0x54: reserved/pointer-like bytes - values observed in
+                // static ParadoxTest\data fixtures are not stable across
+                // separately-created SQLRunner tables (confirmed: PKONLY.DB
+                // created fresh here has 0xFC at 0x51, vs 0xC6 in the
+                // committed fixtures), so these are almost certainly
+                // in-memory pointers/timestamps from the original creating
+                // process rather than fixed structural content. Left as
+                // zero, matching this library's existing "reserved fields
+                // are never dereferenced" convention.
                 w.Write(new byte[5]);                 // 0x50-0x54 unknown50x54
                 w.Write((byte)0);                    // 0x55 refIntegrity
-                w.Write(new byte[2]);                 // 0x56-0x57 unknown56x57
+                // 0x56-0x57: real BDE .DB/.Xnn/.XGn files always have 0x0020
+                // here; .PX/.YGn files always have 0x0000 (confirmed across
+                // every fixture in ParadoxTest\data).
+                w.Write(hasV4Header ? new byte[] { 0x20, 0x00 } : new byte[2]); // 0x56-0x57 unknown56x57
 
-                // V4 header (only DB/index file types, fileVersionID >= 5 - always true here)
-                w.Write((short)0);   // fileVerID2
-                w.Write((short)0);   // fileVerID3
-                w.Write(0);          // encryption2
-                w.Write(0);          // fileUpdateTime
-                w.Write((ushort)0);  // hiFieldID
-                w.Write((ushort)0);  // hiFieldIDinfo
-                w.Write((short)0);   // sometimesNumFields
-                w.Write((ushort)0);  // dosCodePage
-                w.Write(new byte[4]); // unknown6Cx6F
-                w.Write((short)0);   // changeCount4
-                w.Write(new byte[6]); // unknown72x77
+                if (hasV4Header)
+                {
+                    // Real BDE always stamps fileVerID2/fileVerID3 with
+                    // 0x010B (267) here, not 0 - confirmed across every real
+                    // BDE-created fixture (testtab.DB, PKONLY.DB, etc, all
+                    // regardless of field count/table name). This appears to
+                    // be a fixed version stamp (high byte 0x01 + our
+                    // FileVersionId 0x0B in the low byte), distinct from the
+                    // single fileVersionID byte at 0x39. Leaving these as 0
+                    // previously was one of the signals BDE apps use to
+                    // reject freshly created files as "Older version (see
+                    // context)".
+                    short fileVerIdStamp = (short)(0x0100 | FileVersionId);
+                    w.Write(fileVerIdStamp); // fileVerID2
+                    w.Write(fileVerIdStamp); // fileVerID3
+                    w.Write(0);          // encryption2
+                    w.Write(0);          // fileUpdateTime
+                    w.Write((ushort)0);  // hiFieldID
+                    w.Write((ushort)0);  // hiFieldIDinfo
+                    w.Write((short)0);   // sometimesNumFields
+                    w.Write((ushort)1252);  // dosCodePage
+                    w.Write(new byte[4]); // unknown6Cx6F
+                    w.Write((short)0);   // changeCount4
+                    w.Write(new byte[6]); // unknown72x77
+                }
 
                 // Field definitions (fType byte + fSize byte per field)
                 foreach (var f in fields)
