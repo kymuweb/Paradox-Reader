@@ -265,12 +265,15 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        new TableFieldDefinition("NOTES", ParadoxFieldTypes.MemoBLOb, 250, false),
+                        // CreateMemoField takes the leader (inline byte) size directly,
+                        // matching the "20" in SQL's BLOB(20,1) DDL below - the on-disk
+                        // fSize=30 (leader+10 pointer bytes) is computed automatically.
+                        TableFieldDefinition.CreateMemoField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
                     }
                 },
                 SqlRunnerDdl = new List<string>
                 {
-                    "CREATE TABLE '{PATH}' (ID INTEGER, NAME CHARACTER(20), NOTES BLOB(240,1), PRIMARY KEY (ID))"
+                    "CREATE TABLE '{PATH}' (ID INTEGER, NAME CHARACTER(20), NOTES BLOB(20,1), PRIMARY KEY (ID))"
                 },
                 InsertSqlRunner = "INSERT INTO '{PATH}' (ID, NAME) VALUES (1, 'abc')",
                 InsertOurs = new object[] { 1, "abc", null },
@@ -287,7 +290,7 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.Long, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        new TableFieldDefinition("FILEVAL", ParadoxFieldTypes.BLOb, 250, false),
+                        TableFieldDefinition.CreateMemoField("FILEVAL", ParadoxFieldTypes.BLOb, 240),
                     }
                 },
                 SqlRunnerDdl = new List<string>
@@ -309,12 +312,12 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        new TableFieldDefinition("NOTES", ParadoxFieldTypes.MemoBLOb, 250, false),
+                        TableFieldDefinition.CreateMemoField("NOTES", ParadoxFieldTypes.MemoBLOb, 20),
                     }
                 },
                 SqlRunnerDdl = new List<string>
                 {
-                    "CREATE TABLE '{PATH}' (ID AUTOINC, NAME CHARACTER(20), NOTES BLOB(240,1), PRIMARY KEY (ID))"
+                    "CREATE TABLE '{PATH}' (ID AUTOINC, NAME CHARACTER(20), NOTES BLOB(20,1), PRIMARY KEY (ID))"
                 },
                 InsertSqlRunner = "INSERT INTO '{PATH}' (NAME) VALUES ('abc')",
                 InsertOurs = new object[] { null, "abc", null },
@@ -331,7 +334,7 @@ namespace ParadoxTest
                     {
                         new TableFieldDefinition("ID", ParadoxFieldTypes.AutoInc, 4, true),
                         new TableFieldDefinition("NAME", ParadoxFieldTypes.Alpha, 20, false),
-                        new TableFieldDefinition("FILEVAL", ParadoxFieldTypes.BLOb, 250, false),
+                        TableFieldDefinition.CreateMemoField("FILEVAL", ParadoxFieldTypes.BLOb, 240),
                     }
                 },
                 SqlRunnerDdl = new List<string>

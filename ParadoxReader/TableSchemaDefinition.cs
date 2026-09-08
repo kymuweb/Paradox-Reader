@@ -41,6 +41,35 @@ namespace ParadoxReader
         {
             return new TableFieldDefinition(Name, Type, Size, IsPrimaryKey);
         }
+
+        /// <summary>
+        /// Creates a memo/blob field definition from a user-facing "leader size"
+        /// (the number of bytes that can be stored directly inline in the .DB
+        /// record before the value must be externalized to the .MB file) -
+        /// mirroring how SQL's <c>BLOB(n, ...)</c> DDL syntax and the BDE UI
+        /// both express memo/blob field sizes, and how a table designer would
+        /// naturally think of "how much can I write directly into the record".
+        ///
+        /// On disk, a memo/blob field's fSize is actually <paramref name="leaderSize"/>
+        /// + 10 (the trailing 10 bytes are the blob pointer: offset+index (4),
+        /// size (4), mod_nr (2) - see ParadoxBlobFile/ParadoxRecord for details).
+        /// This factory hides that +10 adjustment so callers never need to
+        /// reason about the on-disk leader/pointer split themselves.
+        /// </summary>
+        /// <param name="name">Field name.</param>
+        /// <param name="type">Must be a memo/blob-capable type (MemoBLOb, FmtMemoBLOb, BLOb, OLE, or Graphic).</param>
+        /// <param name="leaderSize">
+        /// The inline byte capacity, matching the "n" in SQL's BLOB(n, ...) syntax.
+        /// Must leave room for the 10-byte pointer, i.e. leaderSize + 10 &lt;= 255.
+        /// </param>
+        /// <param name="isPrimaryKey">True if this field is (part of) the primary key.</param>
+        public static TableFieldDefinition CreateMemoField(string name, ParadoxFieldTypes type, int leaderSize, bool isPrimaryKey = false)
+        {
+            if (leaderSize < 0 || leaderSize + 10 > 255)
+                throw new ArgumentOutOfRangeException(nameof(leaderSize), leaderSize, "leaderSize must be between 0 and 245 (leaderSize + 10 must fit in a byte).");
+
+            return new TableFieldDefinition(name, type, (byte)(leaderSize + 10), isPrimaryKey);
+        }
     }
 
     /// <summary>
