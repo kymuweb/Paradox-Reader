@@ -180,5 +180,70 @@ namespace ParadoxDesktop
         public void Paste() => sqlTextBox.Paste();
 
         public void SelectAll() => sqlTextBox.SelectAll();
+
+        // ----------------------------------------------------------------
+        // Export CSV
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Exports the last SELECT's result set (currently shown in
+        /// <see cref="resultsGridView"/>) to a CSV file chosen via a Save
+        /// dialog. Shows an informational message if no results are available.
+        /// </summary>
+        public void ExportCsv()
+        {
+            var table = resultsGridView.DataSource as DataTable;
+            if (table == null || table.Columns.Count == 0)
+            {
+                MessageBox.Show(this, "No SQL results to export. Run a SELECT statement first.", "Export",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (var dlg = new SaveFileDialog())
+            {
+                dlg.Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*";
+                dlg.DefaultExt = "csv";
+                dlg.FileName = (string.IsNullOrEmpty(FilePath) ? "SqlResults" : Path.GetFileNameWithoutExtension(FilePath)) + ".csv";
+
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                try
+                {
+                    using (var writer = new StreamWriter(dlg.FileName, false, System.Text.Encoding.UTF8))
+                    {
+                        var columnNames = table.Columns.Cast<DataColumn>().Select(c => CsvEscape(c.ColumnName)).ToArray();
+                        writer.WriteLine(string.Join(",", columnNames));
+
+                        foreach (DataRow row in table.Rows)
+                        {
+                            var fields = new string[table.Columns.Count];
+                            for (int i = 0; i < fields.Length; i++)
+                            {
+                                var value = row[i];
+                                fields[i] = CsvEscape(value == null || value == DBNull.Value ? string.Empty : Convert.ToString(value));
+                            }
+                            writer.WriteLine(string.Join(",", fields));
+                        }
+                    }
+
+                    MessageBox.Show(this, "Exported to:\r\n" + dlg.FileName, "Export",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "Export failed:\r\n" + ex.Message, "Export",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private static string CsvEscape(string value)
+        {
+            if (value == null) return string.Empty;
+            if (value.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0)
+                return "\"" + value.Replace("\"", "\"\"") + "\"";
+            return value;
+        }
     }
 }

@@ -210,15 +210,20 @@ namespace ParadoxDesktop
 
         private void exportMenuItem_Click(object sender, EventArgs e)
         {
-            var editor = ActiveTableEditor;
-            if (editor == null)
+            if (ActiveTableEditor != null)
             {
-                MessageBox.Show(this, "No table is currently open.", "Export",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ActiveTableEditor.ExportCsv();
                 return;
             }
 
-            editor.ExportCsv();
+            if (ActiveSqlEditor != null)
+            {
+                ActiveSqlEditor.ExportCsv();
+                return;
+            }
+
+            MessageBox.Show(this, "No table or SQL results are currently open.", "Export",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void exitMenuItem_Click(object sender, EventArgs e)
