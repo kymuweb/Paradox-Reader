@@ -103,7 +103,27 @@ namespace ParadoxDesktop
             }
 
             rowCursor = new RowCursor(table);
-            dataGridView.RowCount = rowCursor.TotalRows;
+
+            // Setting RowCount directly with RowHeadersWidthSizeMode set to
+            // AutoSizeToAllHeaders makes WinForms re-measure every existing
+            // row header (via the visual styles COM renderer) each time a
+            // row is added, which is O(n) expensive COM calls on the UI
+            // thread with no message pumping in between. For large tables
+            // this can run long enough to trip the CLR's
+            // ContextSwitchDeadlock MDA. Temporarily switch to a fixed
+            // sizing mode for the bulk row-count change, then restore
+            // auto-sizing (which then only measures once).
+            var savedRowHeadersWidthSizeMode = dataGridView.RowHeadersWidthSizeMode;
+            dataGridView.RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing;
+            try
+            {
+                dataGridView.RowCount = rowCursor.TotalRows;
+            }
+            finally
+            {
+                dataGridView.RowHeadersWidthSizeMode = savedRowHeadersWidthSizeMode;
+            }
+
             undoRedoManager.Clear();
 
             statusLabel.Text = string.Format("{0} record(s). {1}", table.RecordCount,

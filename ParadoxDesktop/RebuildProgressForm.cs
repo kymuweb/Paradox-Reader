@@ -71,7 +71,14 @@ namespace ParadoxDesktop
 
         private void StartOperation()
         {
-            var progress = new Progress<TableRebuildProgress>(OnProgressReported);
+            // NOTE: Progress<T> marshals every single Report() call to the UI thread as its
+            // own queued message (via SynchronizationContext.Post). Large-table rebuilds can
+            // report thousands of updates (e.g. every ~256 records), which floods the UI
+            // thread's message queue; the "OnOperationCompleted" BeginInvoke then sits behind
+            // that entire backlog, making the dialog appear stuck even though the background
+            // operation already finished. CoalescingProgress instead keeps only the latest
+            // value and schedules at most one pending UI update at a time.
+            var progress = new CoalescingProgress(this, OnProgressReported);
             var token = cancellationTokenSource.Token;
 
             Task.Run(() =>
@@ -159,6 +166,64 @@ namespace ParadoxDesktop
                 // just request cancellation instead and keep the dialog open.
                 e.Cancel = true;
                 RequestCancel();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="IProgress{T}"/> implementation that coalesces rapid-fire reports onto the
+        /// UI thread: only the most recently reported value is kept, and only one UI-thread
+        /// update is ever queued at a time. Reports arriving while an update is already pending
+        /// simply overwrite the pending value instead of queuing another message, so a flood of
+        /// reports (e.g. one per few hundred records on a large table) can't back up the UI
+        /// thread's message queue behind the operation's real completion callback.
+        /// </summary>
+        private sealed class CoalescingProgress : IProgress<TableRebuildProgress>
+        {
+            private readonly Control control;
+            private readonly Action<TableRebuildProgress> callback;
+            private readonly object gate = new object();
+            private TableRebuildProgress pending;
+            private bool updateQueued;
+
+            public CoalescingProgress(Control control, Action<TableRebuildProgress> callback)
+            {
+                this.control = control;
+                this.callback = callback;
+            }
+
+            public void Report(TableRebuildProgress value)
+            {
+                lock (gate)
+                {
+                    pending = value;
+                    if (updateQueued) return;
+                    updateQueued = true;
+                }
+
+                try
+                {
+                    control.BeginInvoke((Action)Flush);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Form/handle already gone; nothing left to update.
+                }
+                catch (InvalidOperationException)
+                {
+                    // No window handle yet (shouldn't happen post-OnShown) or already disposed.
+                }
+            }
+
+            private void Flush()
+            {
+                TableRebuildProgress value;
+                lock (gate)
+                {
+                    value = pending;
+                    updateQueued = false;
+                }
+
+                callback(value);
             }
         }
     }
