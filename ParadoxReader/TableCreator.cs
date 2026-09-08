@@ -44,6 +44,21 @@ namespace ParadoxReader
                 File.WriteAllBytes(pxPath, pxHeader);
             }
 
+            // A .DB file with any memo/BLOb-typed field must have an
+            // accompanying .MB blob file, even before any blob value has
+            // ever been written - real BDE-created tables always create it
+            // alongside the .DB at table-creation time (confirmed against
+            // SQLRunner-created PKALPBLOB/PKALPMEMO/AUTOALPBLOB fixtures,
+            // which all have a blank .MB present immediately after CREATE
+            // TABLE). Without it, BDE apps report "File or directory does
+            // not exist" for the .MB when opening the table.
+            if (schema.Fields.Any(f => IsBlobFieldType(f.Type)))
+            {
+                string mbPath = Path.ChangeExtension(dbFilePath, ".MB");
+                byte[] mbHeader = ParadoxHeaderBuilder.BuildBlankMbHeader();
+                File.WriteAllBytes(mbPath, mbHeader);
+            }
+
             // Every index this library creates corresponds to a named index
             // (equivalent to SQLRunner's CREATE INDEX), which real BDE always
             // names .XGn/.YGn with a sequential ordinal - confirmed by
@@ -63,6 +78,25 @@ namespace ParadoxReader
                 string yPath = Path.ChangeExtension(dbFilePath, yExt);
                 byte[] yHeader = ParadoxHeaderBuilder.BuildMaintainedFieldHeader(schema, index);
                 File.WriteAllBytes(yPath, yHeader);
+            }
+        }
+
+        /// <summary>
+        /// True for field types whose values are stored out-of-line in an
+        /// accompanying .MB blob file rather than inline in the .DB record.
+        /// </summary>
+        private static bool IsBlobFieldType(ParadoxFieldTypes type)
+        {
+            switch (type)
+            {
+                case ParadoxFieldTypes.MemoBLOb:
+                case ParadoxFieldTypes.BLOb:
+                case ParadoxFieldTypes.FmtMemoBLOb:
+                case ParadoxFieldTypes.OLE:
+                case ParadoxFieldTypes.Graphic:
+                    return true;
+                default:
+                    return false;
             }
         }
     }

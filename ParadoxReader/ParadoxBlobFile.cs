@@ -149,6 +149,17 @@ namespace ParadoxReader
             var mod_nr = BitConverter.ToUInt16(blobInfo, leader + 8);
             var offset = BitConverter.ToUInt32(blobInfo, leader) & 0xffffff00;
 
+            if (size > 0 && offset == 0 && index == 0)
+            {
+                // Inline memo: the value fits entirely within the field's inline
+                // "leader" prefix (fSize-10 bytes stored directly in the .DB record)
+                // and was never externalized to the .MB file at all (offset/index
+                // both zero). Verified against SQLRunner reference captures: only the
+                // size field (leader+4..leader+7) is non-zero in this case.
+                byte[] inlineBuffer = new byte[size];
+                Array.Copy(blobInfo, 0, inlineBuffer, 0, Math.Min((int)size, leader));
+                return inlineBuffer;
+            }
 
             if (size > 0)
             {
@@ -250,11 +261,18 @@ namespace ParadoxReader
                 for (int i = 0; i < 10; i++)
                     blobInfo[leader + i] = 0;
 
-                // Increment the .MB file's global modification counter (2-byte word at
-                // offset 3), matching real Paradox/BDE behavior on every blob write.
-                IncrementGlobalModCount();
+                if (oldSize > 0)
+                {
+                    // Only touch the .MB file's global modification counter when an
+                    // existing external slot was actually freed above. Verified against
+                    // a SQLRunner reference capture: setting a memo value that fits
+                    // entirely inline (no prior externalized blob, oldSize==0) leaves the
+                    // .MB file completely byte-for-byte unchanged, including the mod
+                    // counter at offset 3.
+                    IncrementGlobalModCount();
+                    this.stream.Flush();
+                }
 
-                this.stream.Flush();
                 return;
             }
 

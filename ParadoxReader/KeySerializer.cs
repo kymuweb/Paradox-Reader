@@ -150,26 +150,43 @@ namespace ParadoxReader
                 {
                     if (file != null && value is MemoValue mv && mv.BlobInfo != null)
                     {
-                        // Encode the new text and overwrite the slot in the .MB file.
-                        // hsize=9: matches the on-disk type-2 header size (see ParadoxRecord.WriteField).
                         byte[] encoded = System.Text.Encoding.Default.GetBytes(mv.Text ?? string.Empty);
-                        file.WriteBlob(mv.BlobInfo, field.fSize, 9, encoded);
-
                         int leader = field.fSize - 10;
 
-                        // The first `leader` bytes of blobInfo are an inline prefix of the
-                        // text content stored directly in the .DB record. Update them so
-                        // the .DB record reflects the new text value.
-                        if (leader > 0)
+                        if (leader > 0 && encoded.Length <= leader)
                         {
-                            int copyLen = Math.Min(leader, encoded.Length);
-                            Array.Copy(encoded, 0, mv.BlobInfo, 0, copyLen);
-                            for (int li = copyLen; li < leader; li++)
+                            // Fits entirely inline: real BDE never touches the .MB file for
+                            // memo values that fit within the field's inline "leader" prefix
+                            // (see ParadoxRecord.WriteField for details).
+                            file.WriteBlob(mv.BlobInfo, field.fSize, 9, null);
+
+                            Array.Copy(encoded, 0, mv.BlobInfo, 0, encoded.Length);
+                            for (int li = encoded.Length; li < leader; li++)
                                 mv.BlobInfo[li] = 0;
+
+                            Buffer.BlockCopy(BitConverter.GetBytes((uint)encoded.Length), 0, mv.BlobInfo, leader + 4, 4);
+                        }
+                        else
+                        {
+                            // Encode the new text and overwrite the slot in the .MB file.
+                            // hsize=9: matches the on-disk type-2 header size (see ParadoxRecord.WriteField).
+                            file.WriteBlob(mv.BlobInfo, field.fSize, 9, encoded);
+
+                            // The first `leader` bytes of blobInfo are an inline prefix of the
+                            // text content stored directly in the .DB record. Update them so
+                            // the .DB record reflects the new text value.
+                            if (leader > 0)
+                            {
+                                int copyLen = Math.Min(leader, encoded.Length);
+                                Array.Copy(encoded, 0, mv.BlobInfo, 0, copyLen);
+                                for (int li = copyLen; li < leader; li++)
+                                    mv.BlobInfo[li] = 0;
+                            }
+
+                            // WriteBlob has already updated blobInfo[leader+8] (mod_nr) to the
+                            // new global slot sequence value — no separate increment needed.
                         }
 
-                        // WriteBlob has already updated blobInfo[leader+8] (mod_nr) to the
-                        // new global slot sequence value — no separate increment needed.
                         byte[] refBytes = mv.BlobInfo;
                         if (refBytes.Length != field.fSize)
                             Array.Resize(ref refBytes, field.fSize);

@@ -208,6 +208,17 @@ namespace ParadoxTest
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "pkalpmemodiagtest")
+            {
+                // Usage: ParadoxTest.exe pkalpmemodiagtest
+                // Recreates C:\TEMP\createtablecompare\PKALPMEMO\ours\PKALPMEM.DB
+                // via our own TableCreator/AppendRecord/UpdateRecord, mirroring
+                // the SQLRunner CREATE/INSERT/UPDATE flow used to (re)build the
+                // sqlrunner-side reference fixture, so the two can be byte-diffed.
+                PkAlpMemoDiagTest.Run();
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "rebuildcomparetest")
             {
                 // Usage: ParadoxTest.exe rebuildcomparetest

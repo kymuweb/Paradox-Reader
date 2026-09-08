@@ -160,6 +160,39 @@ namespace ParadoxReader
             return BuildHeader(schema, ParadoxFileType.YgnFile, zeroedFields, includeFieldNames: false, indexFieldNumber: 0);
         }
 
+        /// <summary>
+        /// Builds a complete empty (no blobs written yet) .MB blob file
+        /// header block. Real BDE-created .MB files (even ones with zero
+        /// memo/BLOb values ever written) always start with this exact
+        /// 4096-byte header block - confirmed byte-for-byte identical
+        /// across every real SQLRunner-created blank .MB fixture in
+        /// ParadoxTest\data regardless of table name/field count
+        /// (PKALPBLOB, PKALPMEMO, AUTOALPBLOB all produce an identical
+        /// blank .MB). Only offsets 0x01, 0x03, 0x05-0x07, 0x09, 0x0C,
+        /// 0x0E, 0x10-0x11, 0x14, 0x29-0x2A are non-zero; the remainder of
+        /// the 4096-byte block (including the rest of this header block
+        /// and its free-space bitmap) is zero for a brand-new blob file
+        /// with no blobs written yet.
+        /// </summary>
+        public static byte[] BuildBlankMbHeader()
+        {
+            byte[] header = new byte[ParadoxHeaderOffsets.BlobHeaderBlockSize];
+            header[0x01] = 0x01;
+            header[0x03] = 0x01;
+            header[0x05] = 0x82;
+            header[0x06] = 0x73;
+            header[0x07] = 0x02;
+            header[0x09] = 0x29;
+            header[0x0C] = 0x10;
+            header[0x0E] = 0x10;
+            header[0x10] = 0x10;
+            header[0x11] = 0x40;
+            header[0x14] = 0x08;
+            header[0x29] = 0xA1;
+            header[0x2A] = 0x02;
+            return header;
+        }
+
         private static List<TableFieldDefinition> BuildSecondaryIndexFieldList(TableSchemaDefinition schema, TableIndexDefinition index)
         {
             var fields = new List<TableFieldDefinition>();
