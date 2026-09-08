@@ -127,6 +127,13 @@ namespace ParadoxDesktop
             fieldsListView.MultiSelect = false;
             fieldsListView.SelectedIndexChanged += fieldsListView_SelectedIndexChanged;
             fieldTypeComboBox.SelectedIndexChanged += fieldTypeComboBox_SelectedIndexChanged;
+
+            // Long is overwhelmingly the most common first field (e.g. an ID/primary
+            // key), so default to it for the very first field only. Set this after
+            // wiring SelectedIndexChanged above so the fixed-size/disable logic in
+            // fieldTypeComboBox_SelectedIndexChanged actually runs for this default,
+            // matching what happens when a user manually picks Long from the dropdown.
+            fieldTypeComboBox.SelectedItem = ParadoxFieldTypes.Long;
         }
 
         private void fieldTypeComboBox_SelectedIndexChanged(object sender, EventArgs e)
@@ -192,13 +199,7 @@ namespace ParadoxDesktop
             var field = SelectedField;
             if (field == null)
             {
-                addUpdateFieldButton.Text = "Add Field";
-                fieldNameTextBox.Text = string.Empty;
-                fieldTypeComboBox.SelectedIndex = 0;
-                fieldSizeNumericUpDown.Value = 1;
-                fieldSizeNumericUpDown.Enabled = !ParadoxFieldTypeSizes.GetFixedSize((ParadoxFieldTypes)fieldTypeComboBox.SelectedItem).HasValue;
-                fieldPrimaryKeyCheckBox.Checked = false;
-                removeFieldButton.Enabled = false;
+                ResetFieldEditor();
                 return;
             }
 
@@ -286,6 +287,29 @@ namespace ParadoxDesktop
             RefreshFieldsList();
             RefreshIndexesList(); // field order may have shifted index field references' display
             fieldsListView.SelectedItems.Clear();
+
+            // Re-adding the exact same field is highly unlikely to be intended, so
+            // reset the editor controls to a fresh "Add Field" state rather than
+            // leaving the just-added field's values in place.
+            ResetFieldEditor();
+        }
+
+        /// <summary>
+        /// Resets the field name/PK/remove-button editor controls to their default,
+        /// "Add Field" state after adding/updating a field. Deliberately leaves the
+        /// type/size combo alone (unlike the very first field, where Long is defaulted
+        /// in ConfigureEditable) since re-adding the same *name* is unlikely but the
+        /// same *type* for a subsequent field is common (e.g. adding several Alpha
+        /// fields in a row), and changing it back would also fight the type combo's
+        /// own SelectedIndexChanged-driven size/enabled logic.
+        /// </summary>
+        private void ResetFieldEditor()
+        {
+            addUpdateFieldButton.Text = "Add Field";
+            fieldNameTextBox.Text = string.Empty;
+            fieldPrimaryKeyCheckBox.Checked = false;
+            removeFieldButton.Enabled = false;
+            fieldNameTextBox.Focus();
         }
 
         private void removeFieldButton_Click(object sender, EventArgs e)
