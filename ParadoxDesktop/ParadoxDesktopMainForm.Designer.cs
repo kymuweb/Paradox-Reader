@@ -85,12 +85,6 @@
             this.pipe9 = new System.Windows.Forms.ToolStripLabel();
             this.deleteRecordToolButton = new System.Windows.Forms.ToolStripButton();
             this.pipe10 = new System.Windows.Forms.ToolStripLabel();
-            this.infoStructureToolButton = new System.Windows.Forms.ToolStripButton();
-            this.pipe11 = new System.Windows.Forms.ToolStripLabel();
-            this.modifyStructureToolButton = new System.Windows.Forms.ToolStripButton();
-            this.pipe12 = new System.Windows.Forms.ToolStripLabel();
-            this.tableRebuildToolButton = new System.Windows.Forms.ToolStripButton();
-            this.pipe13 = new System.Windows.Forms.ToolStripLabel();
             this.runSqlToolButton = new System.Windows.Forms.ToolStripButton();
             this.menuStrip.SuspendLayout();
             this.mainToolStrip.SuspendLayout();
@@ -406,12 +400,6 @@
             this.pipe8,
             this.modifyMemoToolButton,
             this.pipe10,
-            this.infoStructureToolButton,
-            this.pipe11,
-            this.modifyStructureToolButton,
-            this.pipe12,
-            this.tableRebuildToolButton,
-            this.pipe13,
             this.runSqlToolButton});
             this.mainToolStrip.Dock = System.Windows.Forms.DockStyle.Top;
             this.mainToolStrip.Name = "mainToolStrip";
@@ -539,42 +527,6 @@
             this.pipe10.Name = "pipe10";
             this.pipe10.Text = "|";
             //
-            // infoStructureToolButton
-            //
-            this.infoStructureToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
-            this.infoStructureToolButton.Name = "infoStructureToolButton";
-            this.infoStructureToolButton.Text = "Info Structure";
-            this.infoStructureToolButton.Click += new System.EventHandler(this.infoStructureMenuItem_Click);
-            //
-            // pipe11
-            //
-            this.pipe11.Name = "pipe11";
-            this.pipe11.Text = "|";
-            //
-            // modifyStructureToolButton
-            //
-            this.modifyStructureToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
-            this.modifyStructureToolButton.Name = "modifyStructureToolButton";
-            this.modifyStructureToolButton.Text = "Modify Structure";
-            this.modifyStructureToolButton.Click += new System.EventHandler(this.modifyStructureMenuItem_Click);
-            //
-            // pipe12
-            //
-            this.pipe12.Name = "pipe12";
-            this.pipe12.Text = "|";
-            //
-            // tableRebuildToolButton
-            //
-            this.tableRebuildToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
-            this.tableRebuildToolButton.Name = "tableRebuildToolButton";
-            this.tableRebuildToolButton.Text = "Table Rebuild";
-            this.tableRebuildToolButton.Click += new System.EventHandler(this.tableRebuildMenuItem_Click);
-            //
-            // pipe13
-            //
-            this.pipe13.Name = "pipe13";
-            this.pipe13.Text = "|";
-            //
             // runSqlToolButton
             //
             this.runSqlToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
@@ -663,12 +615,6 @@
         private System.Windows.Forms.ToolStripLabel pipe9;
         private System.Windows.Forms.ToolStripButton deleteRecordToolButton;
         private System.Windows.Forms.ToolStripLabel pipe10;
-        private System.Windows.Forms.ToolStripButton infoStructureToolButton;
-        private System.Windows.Forms.ToolStripLabel pipe11;
-        private System.Windows.Forms.ToolStripButton modifyStructureToolButton;
-        private System.Windows.Forms.ToolStripLabel pipe12;
-        private System.Windows.Forms.ToolStripButton tableRebuildToolButton;
-        private System.Windows.Forms.ToolStripLabel pipe13;
         private System.Windows.Forms.ToolStripButton runSqlToolButton;
     }
 }

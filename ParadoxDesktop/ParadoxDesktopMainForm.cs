@@ -77,17 +77,10 @@ namespace ParadoxDesktop
             pipe8.Visible = recordVisible;
             modifyMemoToolButton.Visible = recordVisible;
 
-            infoStructureToolButton.Visible = tableVisible;
-            pipe11.Visible = tableVisible;
-            modifyStructureToolButton.Visible = tableVisible;
-            pipe12.Visible = tableVisible;
-            tableRebuildToolButton.Visible = tableVisible;
-
             runSqlToolButton.Visible = sqlVisible;
 
-            pipe6.Visible = editVisible && (recordVisible || tableVisible || sqlVisible);
-            pipe10.Visible = recordVisible && (tableVisible || sqlVisible);
-            pipe13.Visible = tableVisible && sqlVisible;
+            pipe6.Visible = editVisible && (recordVisible || sqlVisible);
+            pipe10.Visible = recordVisible && sqlVisible;
         }
 
         // ----------------------------------------------------------------
@@ -107,8 +100,6 @@ namespace ParadoxDesktop
         private void newTableMenuItem_Click(object sender, EventArgs e)
         {
 
-            MessageBox.Show(this, "This is an experimental feature and likely to not work. Suggest you use an alternate method of creating tables for now.", "New Table",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
 
             using (var structureForm = new TableStructureForm(TableStructureMode.Create, null))
             {
