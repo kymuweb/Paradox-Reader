@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ParadoxTest
 {
@@ -36,6 +37,69 @@ namespace ParadoxTest
             public bool Exited;
             public string Stdout = string.Empty;
             public string Stderr = string.Empty;
+        }
+
+        /// <summary>
+        /// Confirms functional readability AND correctness via SQLRunner's
+        /// "select count(*) from '&lt;dbPath&gt;'" oracle - a real BDE engine
+        /// opening/scanning the table end to end, which is a much stronger
+        /// signal that the on-disk file is genuinely well-formed than "this
+        /// library can still read the bytes back". A healthy table produces
+        /// exactly one "Read 1 rows." line (always 1, regardless of the
+        /// table's actual record count - even an empty table is still "1
+        /// result") followed by a "Count: N" line where N is the real record
+        /// count; anything else (including SQLRunner falling back to
+        /// dumping one line per record, or producing no Read/Count lines at
+        /// all) indicates SQLRunner/BDE considers the table broken.
+        /// </summary>
+        /// <param name="dbPath">Full path to the .DB table to query.</param>
+        /// <param name="label">Short label used in diagnostic console output.</param>
+        /// <param name="expectedRecordCount">The record count the table is expected to report.</param>
+        /// <param name="preStdinDelayMs">
+        /// Delay before feeding the dismiss-prompt ENTER keystroke to stdin.
+        /// A full-table "select count(*)" can take noticeably longer than a
+        /// trivial operation over a blob-bearing table, so give SQLRunner
+        /// extra time by default to compute/print its result first.
+        /// </param>
+        /// <param name="timeoutMs">
+        /// How long to wait for SQLRunner to exit before treating it as hung.
+        /// </param>
+        public static bool CountOracle(string dbPath, string label, int expectedRecordCount, int preStdinDelayMs = 15000, int timeoutMs = 30000)
+        {
+            if (!File.Exists(dbPath))
+            {
+                Console.WriteLine("  [{0}] SKIP (file not found: {1})", label, dbPath);
+                return false;
+            }
+
+            var result = Execute("select count(*) from '" + dbPath + "'", preStdinDelayMs: preStdinDelayMs, timeoutMs: timeoutMs);
+            string stdout = result.Stdout;
+            string stderr = result.Stderr;
+
+            var readMatch = Regex.Match(stdout, @"Read (\d+) rows?\.", RegexOptions.IgnoreCase);
+            var countMatch = Regex.Match(stdout, @"Count:\s*(-?\d+)", RegexOptions.IgnoreCase);
+
+            if (!result.Exited || !readMatch.Success || !countMatch.Success)
+            {
+                Console.WriteLine("  [{0}] FAIL (could not parse \"Read N rows.\" / \"Count: N\" lines from SQLRunner output)", label);
+                Console.WriteLine("  ---- raw stdout ----");
+                Console.WriteLine(stdout);
+                Console.WriteLine("  ---- raw stderr ----");
+                Console.WriteLine(stderr);
+                Console.WriteLine("  ---------------------");
+                return false;
+            }
+
+            int readRows = int.Parse(readMatch.Groups[1].Value);
+            int actualCount = int.Parse(countMatch.Groups[1].Value);
+
+            bool readOk = readRows == 1; // count(*) must always be a single aggregate result
+            bool countOk = actualCount == expectedRecordCount;
+            bool ok = readOk && countOk;
+
+            Console.WriteLine("  [{0}] {1} (read {2} row(s) [expected 1], Count={3} [expected {4}])",
+                label, ok ? "PASS" : "FAIL", readRows, actualCount, expectedRecordCount);
+            return ok;
         }
 
         /// <summary>

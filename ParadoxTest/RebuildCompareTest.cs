@@ -304,50 +304,14 @@ namespace ParadoxTest
         }
 
         /// <summary>
-        /// Confirms functional readability AND correctness via SQLRunner's
-        /// "select count(*)" oracle. SQLRunner now returns a genuine
-        /// aggregate: exactly one "Read 1 rows." line (always 1, regardless
-        /// of the table's actual record count - even an empty table is
-        /// still "1 result"), followed by a "Count: N" line where N is the
-        /// real record count. Both are validated: reading anything other
-        /// than "Read 1 rows." indicates SQLRunner fell back to dumping one
-        /// line per record (a broken/corrupt table), and the parsed Count
-        /// must match <paramref name="expectedRecordCount"/>.
+        /// Thin wrapper delegating to the shared <see cref="SqlRunner.CountOracle"/>
+        /// oracle, using the longer pre-stdin delay/timeout this harness has
+        /// always needed for full-table "select count(*)" over blob-bearing
+        /// tables.
         /// </summary>
         private static bool RunCountOracle(string dbPath, string label, int expectedRecordCount)
         {
-            if (!File.Exists(dbPath))
-            {
-                Console.WriteLine("  [{0}] SKIP (file not found: {1})", label, dbPath);
-                return false;
-            }
-
-            bool exited = RunSqlRunnerCapture("select count(*) from '" + dbPath + "'", out string stdout, out string stderr);
-
-            var readMatch = Regex.Match(stdout, @"Read (\d+) rows?\.", RegexOptions.IgnoreCase);
-            var countMatch = Regex.Match(stdout, @"Count:\s*(-?\d+)", RegexOptions.IgnoreCase);
-
-            if (!exited || !readMatch.Success || !countMatch.Success)
-            {
-                Console.WriteLine("  [{0}] FAIL (could not parse \"Read N rows.\" / \"Count: N\" lines from SQLRunner output)", label);
-                Console.WriteLine("  ---- raw stdout ----");
-                Console.WriteLine(stdout);
-                Console.WriteLine("  ---- raw stderr ----");
-                Console.WriteLine(stderr);
-                Console.WriteLine("  ---------------------");
-                return false;
-            }
-
-            int readRows = int.Parse(readMatch.Groups[1].Value);
-            int actualCount = int.Parse(countMatch.Groups[1].Value);
-
-            bool readOk = readRows == 1; // count(*) must always be a single aggregate result
-            bool countOk = actualCount == expectedRecordCount;
-            bool ok = readOk && countOk;
-
-            Console.WriteLine("  [{0}] {1} (read {2} row(s) [expected 1], Count={3} [expected {4}])",
-                label, ok ? "PASS" : "FAIL", readRows, actualCount, expectedRecordCount);
-            return ok;
+            return SqlRunner.CountOracle(dbPath, label, expectedRecordCount, preStdinDelayMs: 15000, timeoutMs: 30000);
         }
 
         // --------------------------------------------------------------

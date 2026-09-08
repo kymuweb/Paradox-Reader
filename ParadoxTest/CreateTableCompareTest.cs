@@ -91,6 +91,10 @@ namespace ParadoxTest
                 Console.WriteLine("--- Full byte comparison BLANK (immediately after create) ---");
                 int blankDiffCount = CompareAllFilesFullByte(oursDir, sqlDir, baseName);
 
+                Console.WriteLine("--- SQLRunner count(*) oracle BLANK (immediately after create) ---");
+                bool oursCountOkBlank = SqlRunner.CountOracle(oursDbPath, "ours", 0);
+                bool sqlCountOkBlank = SqlRunner.CountOracle(sqlDbPath, "sqlrunner", 0);
+
                 // ---- Insert one record into BOTH sides using OUR insert
                 // logic, so the SQLRunner-created table isn't touched by
                 // SQLRunner itself (also required if the SQLRunner-created
@@ -109,7 +113,15 @@ namespace ParadoxTest
                 Console.WriteLine("--- Full byte comparison AFTER ONE INSERT (both via our InsertRecord) ---");
                 int insertDiffCount = CompareAllFilesFullByte(oursDir, sqlDir, baseName);
 
-                summary.Add(string.Format("{0}: blank-diffs={1}, post-insert-diffs={2}", c.Name, blankDiffCount, insertDiffCount));
+                Console.WriteLine("--- SQLRunner count(*) oracle AFTER ONE INSERT ---");
+                bool oursCountOkInsert = SqlRunner.CountOracle(oursDbPath, "ours", 1);
+                bool sqlCountOkInsert = SqlRunner.CountOracle(sqlDbPath, "sqlrunner", 1);
+
+                summary.Add(string.Format(
+                    "{0}: blank-diffs={1}, post-insert-diffs={2}, count-oracle(blank ours/sql)={3}/{4}, count-oracle(insert ours/sql)={5}/{6}",
+                    c.Name, blankDiffCount, insertDiffCount,
+                    oursCountOkBlank ? "PASS" : "FAIL", sqlCountOkBlank ? "PASS" : "FAIL",
+                    oursCountOkInsert ? "PASS" : "FAIL", sqlCountOkInsert ? "PASS" : "FAIL"));
             }
 
             Console.WriteLine();

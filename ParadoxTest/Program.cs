@@ -18,8 +18,6 @@ namespace ParadoxTest
         static void Main(string[] args)
         {
 
-            args = new string[] { "createtabletest" };
-
             if (args.Length > 0 && args[0] == "libupdatetest")
             {
                 MiscTests.RunLibUpdateTest();
