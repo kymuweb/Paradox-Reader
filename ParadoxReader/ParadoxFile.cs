@@ -8,55 +8,192 @@ using System.Text;
 
 namespace ParadoxReader
 {
+    /// <remarks>
+    /// FIELD OFFSETS AND KNOWN VALUES (base header, before the optional V4
+    /// header extension - see <see cref="V4Hdr"/> for offsets 0x58-0x77).
+    /// Offsets below are absolute file offsets, in the order read by
+    /// <see cref="ReadHeader"/>; each field's summary gives its offset,
+    /// wire type/size, and - where empirically confirmed against real
+    /// BDE/SQLRunner-created fixtures (see ParadoxTest\data,
+    /// ParadoxTest.HeaderCompareTest, and ParadoxTest.BdeConfigCompareTest) -
+    /// the value(s) a from-scratch writer needs to produce. See also
+    /// <see cref="ParadoxHeaderOffsets"/> (the subset of these offsets
+    /// exposed as named constants for direct-seek callers) and
+    /// <see cref="ParadoxHeaderBuilder"/> (the authoritative from-scratch
+    /// writer implementing all of the below).
+    /// </remarks>
     public partial class ParadoxFile : IDisposable
     {
         public string TableName;
 
+        /// <summary>RecordSize (uint16) @ 0x00. Row data length in bytes (sum of field sizes); for .PX files, keyDataSize + 6 (see <see cref="ParadoxHeaderBuilder.BuildPxHeader"/>).</summary>
         public ushort RecordSize { get; private set; }
+
+        /// <summary>headerSize (uint16) @ 0x02. Always padded to a full block (2048 bytes) for a freshly created empty table/index file, regardless of block size (see <see cref="ParadoxHeaderBuilder"/>'s DefaultHeaderSize remarks) - NOT simply maxTableSize * 0x400.</summary>
         internal ushort headerSize;
+
+        /// <summary>FileType (byte) @ 0x04. See <see cref="ParadoxFileType"/> (DbFileIndexed/DbFileNotIndexed/PxFile/XgnFile.../YgnFile/etc).</summary>
         public ParadoxFileType FileType { get; private set; }
+
+        /// <summary>
+        /// maxTableSize (byte) @ 0x05. Block size in KB (blockSize = maxTableSize * 1024).
+        /// For .DB/.XGn/.Xnn/.Ynn files this follows the BDE's configured
+        /// PARADOX/idapi32.cfg BLOCK SIZE setting (this library defaults new
+        /// tables to 32, i.e. 32768-byte blocks/~4GB max table size - see
+        /// <see cref="ParadoxHeaderBuilder"/>'s DefaultMaxTableSize). For .PX
+        /// and .YGn files, real BDE always uses a FIXED value of 2 (2048-byte
+        /// blocks) regardless of the table's configured block size - confirmed
+        /// via ParadoxTest.BdeConfigCompareTest (see FixedSmallMaxTableSize).
+        /// </summary>
         internal byte maxTableSize;
+
         public int RecordCount { get; internal set; }
+
+        /// <summary>nextBlock (uint16) @ 0x0A. Part of the block-chain pointers (see <see cref="ParadoxHeaderOffsets.BlockChain"/>); 0 for a freshly created empty file.</summary>
         internal ushort nextBlock;
+
+        /// <summary>fileBlocks (uint16) @ 0x0C. Total data blocks currently allocated; 0 for a freshly created empty file.</summary>
         internal ushort fileBlocks;
+
+        /// <summary>firstBlock (uint16) @ 0x0E. 0 for a freshly created empty file.</summary>
         internal ushort firstBlock;
+
+        /// <summary>lastBlock (uint16) @ 0x10. 0 for a freshly created empty file.</summary>
         internal ushort lastBlock;
+
+        /// <summary>unknown12x13 (uint16) @ 0x12. Constant 0x0006 across every real BDE-created fixture (.DB and .PX alike, regardless of schema) - confirmed empirically.</summary>
         internal ushort unknown12x13;
+
+        /// <summary>modifiedFlags1 (byte) @ 0x14. 0 for a freshly created file.</summary>
         internal byte modifiedFlags1;
+
+        /// <summary>indexFieldNumber (byte) @ 0x15. Only meaningful on secondary index files (1-based index of the indexed field); 0 elsewhere.</summary>
         internal byte indexFieldNumber;
+
+        /// <summary>primaryIndexWorkspace (int32) @ 0x16. Runtime/workspace pointer - not stable across processes; 0 is safe for a freshly created file.</summary>
         internal int primaryIndexWorkspace;
+
+        /// <summary>unknownPtr1A (int32) @ 0x1A. Runtime pointer, not stable across processes; 0 is safe for a freshly created file.</summary>
         internal int unknownPtr1A;
+
+        /// <summary>pxRootBlockId (uint16) @ 0x1E. See <see cref="ParadoxHeaderOffsets.PxRootBlockId"/>; 0 for a freshly created empty .PX (no root block allocated yet).</summary>
         internal ushort pxRootBlockId;
+
+        /// <summary>pxLevelCount (byte) @ 0x20. See <see cref="ParadoxHeaderOffsets.PxLevelCount"/>; 0 for a freshly created empty (zero-level) .PX.</summary>
         internal byte pxLevelCount;
+
+        /// <summary>FieldCount (int16) @ 0x21. Number of field definitions that follow the header (for .PX files, this library's in-memory FieldCount is +3 for the trailing pointer fields - see <see cref="ReadHeader"/>).</summary>
         public short FieldCount { get; private set; }
+
+        /// <summary>primaryKeyFields (int16) @ 0x23. Count of leading fields (of FieldCount) that make up the primary key; 0 when the table has no primary key.</summary>
         internal short primaryKeyFields;
+
+        /// <summary>
+        /// encryption1 (int32) @ 0x25. Holds the 32-bit encryption key for
+        /// .DB files, or 0 when unencrypted. For index files (.PX/.Xnn/etc)
+        /// this instead holds the sentinel 0xFF00FF00, meaning the real key
+        /// lives in <see cref="V4Hdr.Encryption2"/> - see <see cref="EncryptionKey"/>.
+        /// </summary>
         internal int encryption1;
+
+        /// <summary>sortOrder (byte) @ 0x29. Language-driver/collation identifier byte; not currently written distinctly by this library (see sortOrderID string written separately for .DB files in <see cref="ParadoxHeaderBuilder"/>).</summary>
         internal byte sortOrder;
+
+        /// <summary>modifiedFlags2 (byte) @ 0x2A. 0 for a freshly created file.</summary>
         internal byte modifiedFlags2;
+
+        /// <summary>unknown2Bx2C (2 bytes) @ 0x2B-0x2C. Byte [1] (@ 0x2C) is a write counter - see <see cref="ParadoxHeaderOffsets.WriteCounter"/>; both bytes are runtime/process-dependent, not stable across independent creations.</summary>
         private byte[] unknown2Bx2C;  //  array[$002B..$002C] of byte;
+
+        /// <summary>changeCount1 (byte) @ 0x2D. See <see cref="ParadoxHeaderOffsets.ChangeCount1"/>. Real BDE always stamps 0x5D here for .DB files (0 for .PX/.YGn/etc) - confirmed empirically; this appears to be a fixed stamp rather than content-derived.</summary>
         internal byte changeCount1;
+
+        /// <summary>changeCount2 (byte) @ 0x2E. See <see cref="ParadoxHeaderOffsets.ChangeCount2"/>. Real BDE always stamps 0x5B here for .DB files (0 for .PX/.YGn/etc), paired with changeCount1 - confirmed empirically.</summary>
         internal byte changeCount2;
+
+        /// <summary>unknown2F (byte) @ 0x2F. 0 for a freshly created file.</summary>
         internal byte unknown2F;
+
+        /// <summary>tableNamePtrPtr (int32) @ 0x30. Runtime pointer, not stable across processes; 0 is safe for a freshly created file.</summary>
         private int tableNamePtrPtr; // ^pchar;
+
+        /// <summary>fldInfoPtr (int32) @ 0x34. Runtime pointer, not stable across processes; 0 is safe for a freshly created file.</summary>
         private int fldInfoPtr;  //  PFldInfoRec;
+
+        /// <summary>writeProtected (byte) @ 0x38. 0 for a freshly created, non-write-protected file.</summary>
         internal byte writeProtected;
+
+        /// <summary>
+        /// fileVersionID (byte) @ 0x39. The on-disk format level. This
+        /// library defaults new tables to 0x0C (Paradox 7+, 261-byte "long"
+        /// table-name field layout, needed to pair with the larger
+        /// 32768-byte default block size - see <see cref="ParadoxHeaderBuilder.FileVersionId"/>);
+        /// 0x0B is the older "short" 79-byte table-name layout (Paradox
+        /// 5/7-compatible). The table-name field length and the presence of
+        /// <see cref="V4Hdr"/> both depend on this byte - see <see cref="ReadHeader"/>.
+        /// </summary>
         internal byte fileVersionID;
+
+        /// <summary>maxBlocks (uint16) @ 0x3A. 0 for a freshly created empty file (no block limit reservation yet).</summary>
         internal ushort maxBlocks;
+
+        /// <summary>unknown3C (byte) @ 0x3C. 0 for a freshly created file.</summary>
         internal byte unknown3C;
+
+        /// <summary>auxPasswords (byte) @ 0x3D. 0 for a freshly created, unencrypted file.</summary>
         internal byte auxPasswords;
+
+        /// <summary>unknown3Ex3F (2 bytes) @ 0x3E-0x3F. Real BDE .DB/.Xnn/.XGn files always have 0x0F1F here; .PX/.YGn files always have 0x0000 - confirmed empirically.</summary>
         private byte[] unknown3Ex3F; //  array[$003E..$003F] of byte;
+
+        /// <summary>cryptInfoStartPtr (int32) @ 0x40. Runtime pointer, not stable across processes; 0 is safe for a freshly created, unencrypted file.</summary>
         private int cryptInfoStartPtr; //  pointer;
+
+        /// <summary>cryptInfoEndPtr (int32) @ 0x44. Runtime pointer, not stable across processes; 0 is safe for a freshly created, unencrypted file.</summary>
         internal int cryptInfoEndPtr;
+
+        /// <summary>unknown48 (byte) @ 0x48. 0 for a freshly created file.</summary>
         internal byte unknown48;
+
+        /// <summary>autoIncVal (int32) @ 0x49. Next AUTOINC value to assign; 0 for a freshly created table with no AUTOINC field populated yet.</summary>
         internal int autoIncVal; //  longint;
+
+        /// <summary>unknown4Dx4E (2 bytes) @ 0x4D-0x4E. 0 for a freshly created file.</summary>
         private byte[] unknown4Dx4E;  //array[$004D..$004E] of byte;
+
+        /// <summary>indexUpdateRequired (byte) @ 0x4F. 0 for a freshly created table whose indexes (if any) are up to date.</summary>
         internal byte indexUpdateRequired;
+
+        /// <summary>
+        /// unknown50x54 (5 bytes) @ 0x50-0x54. Byte 0 (@ 0x50) has no stable
+        /// pattern observed and is left zero. Bytes 1-2 (@ 0x51-0x52) are
+        /// the CRITICAL, load-bearing realHeaderSize field (uint16) - the
+        /// minimal byte count actually needed by the header fields + field
+        /// defs + names (distinct from <see cref="headerSize"/>, which is
+        /// always padded to a full 2048-byte block); zeroing this on an
+        /// otherwise-valid file has been observed to crash the BDE engine
+        /// on read. See <see cref="ParadoxHeaderBuilder"/>'s realHeaderSize
+        /// computation (mirrors pxlibcpp's put_px_head()). Bytes 3-4 are
+        /// left zero (only 1 real byte remains in that span after the
+        /// uint16, per the builder's padding comments).
+        /// </summary>
         internal byte[] unknown50x54;  //array[$0050..$0054] of byte;
+
+        /// <summary>refIntegrity (byte) @ 0x55. 0 for a freshly created file (no referential-integrity constraints).</summary>
         private byte refIntegrity;
+
+        /// <summary>unknown56x57 (2 bytes) @ 0x56-0x57. Real BDE .DB/.Xnn/.XGn files always have 0x0020 here; .PX/.YGn files always have 0x0000 - confirmed empirically, same hasV4Header-gated pattern as unknown3Ex3F above.</summary>
         internal byte[] unknown56x57;  //array[$0056..$0057] of byte;
+
+        /// <summary>The optional 32-byte V4 header extension @ 0x58-0x77. Only present for .DB/.Xnn/.XGn files with fileVersionID &gt;= 5 - see <see cref="V4Hdr"/> for its own offsets/known values.</summary>
         internal V4Hdr V4Header;
+
         internal ParadoxFile.FieldInfo[] FieldTypes { get; set; } // array[1..255] of TFldInfoRec);
+
+        /// <summary>tableNamePtr (int32). Runtime pointer immediately following the field definitions; not stable across processes, 0 is safe for a freshly created file.</summary>
         private int tableNamePtr;
+
+        /// <summary>fieldNamePtrArray (one int32 per field). Runtime pointers, .DB files only; not stable across processes, 0 is safe for each entry in a freshly created file.</summary>
         private int[] fieldNamePtrArray;
         public string[] FieldNames { get; private set; }
 
@@ -253,6 +390,16 @@ namespace ParadoxReader
             }
         }
 
+        /// <summary>
+        /// Reads the base header (offsets 0x00-0x57), the optional V4 header
+        /// extension (0x58-0x77, see <see cref="V4Hdr"/>), field definitions,
+        /// table name, and field names, in that exact on-disk order. See the
+        /// per-field summaries on this class's members above for each
+        /// field's offset and known/expected values - this method is the
+        /// authoritative reference for the read order and field sizes those
+        /// summaries describe; <see cref="ParadoxHeaderBuilder"/> is the
+        /// mirror-image from-scratch writer.
+        /// </summary>
         private void ReadHeader()
         {
             var r = this.reader;
