@@ -64,7 +64,32 @@
             this.helpMenuItem = new System.Windows.Forms.ToolStripMenuItem();
             this.helpMenuItemHelp = new System.Windows.Forms.ToolStripMenuItem();
             this.openFileDialog = new System.Windows.Forms.OpenFileDialog();
+            this.editToolStrip = new System.Windows.Forms.ToolStrip();
+            this.undoToolButton = new System.Windows.Forms.ToolStripButton();
+            this.redoToolButton = new System.Windows.Forms.ToolStripButton();
+            this.editToolSeparator1 = new System.Windows.Forms.ToolStripSeparator();
+            this.cutToolButton = new System.Windows.Forms.ToolStripButton();
+            this.copyToolButton = new System.Windows.Forms.ToolStripButton();
+            this.pasteToolButton = new System.Windows.Forms.ToolStripButton();
+            this.editToolSeparator2 = new System.Windows.Forms.ToolStripSeparator();
+            this.selectAllToolButton = new System.Windows.Forms.ToolStripButton();
+            this.editToolSeparator3 = new System.Windows.Forms.ToolStripSeparator();
+            this.editModeToolButton = new System.Windows.Forms.ToolStripButton();
+            this.modifyMemoToolButton = new System.Windows.Forms.ToolStripButton();
+            this.recordToolStrip = new System.Windows.Forms.ToolStrip();
+            this.insertRecordToolButton = new System.Windows.Forms.ToolStripButton();
+            this.deleteRecordToolButton = new System.Windows.Forms.ToolStripButton();
+            this.tableToolStrip = new System.Windows.Forms.ToolStrip();
+            this.infoStructureToolButton = new System.Windows.Forms.ToolStripButton();
+            this.modifyStructureToolButton = new System.Windows.Forms.ToolStripButton();
+            this.tableRebuildToolButton = new System.Windows.Forms.ToolStripButton();
+            this.sqlToolStrip = new System.Windows.Forms.ToolStrip();
+            this.runSqlToolButton = new System.Windows.Forms.ToolStripButton();
             this.menuStrip.SuspendLayout();
+            this.editToolStrip.SuspendLayout();
+            this.recordToolStrip.SuspendLayout();
+            this.tableToolStrip.SuspendLayout();
+            this.sqlToolStrip.SuspendLayout();
             this.SuspendLayout();
             //
             // menuStrip
@@ -108,6 +133,7 @@
             // newTableMenuItem
             //
             this.newTableMenuItem.Name = "newTableMenuItem";
+            this.newTableMenuItem.ShortcutKeys = ((System.Windows.Forms.Keys)((System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.N)));
             this.newTableMenuItem.Size = new System.Drawing.Size(180, 22);
             this.newTableMenuItem.Text = "&Table...";
             this.newTableMenuItem.Click += new System.EventHandler(this.newTableMenuItem_Click);
@@ -115,6 +141,7 @@
             // newSqlFileMenuItem
             //
             this.newSqlFileMenuItem.Name = "newSqlFileMenuItem";
+            this.newSqlFileMenuItem.ShortcutKeys = ((System.Windows.Forms.Keys)(((System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Shift) | System.Windows.Forms.Keys.N)));
             this.newSqlFileMenuItem.Size = new System.Drawing.Size(180, 22);
             this.newSqlFileMenuItem.Text = "&SQL File";
             this.newSqlFileMenuItem.Click += new System.EventHandler(this.newSqlFileMenuItem_Click);
@@ -127,6 +154,7 @@
             // openMenuItem
             //
             this.openMenuItem.Name = "openMenuItem";
+            this.openMenuItem.ShortcutKeys = ((System.Windows.Forms.Keys)((System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.O)));
             this.openMenuItem.Size = new System.Drawing.Size(180, 22);
             this.openMenuItem.Text = "&Open...";
             this.openMenuItem.Click += new System.EventHandler(this.openMenuItem_Click);
@@ -134,6 +162,7 @@
             // saveAsMenuItem
             //
             this.saveAsMenuItem.Name = "saveAsMenuItem";
+            this.saveAsMenuItem.ShortcutKeys = ((System.Windows.Forms.Keys)(((System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Shift) | System.Windows.Forms.Keys.S)));
             this.saveAsMenuItem.Size = new System.Drawing.Size(180, 22);
             this.saveAsMenuItem.Text = "Save &As...";
             this.saveAsMenuItem.Click += new System.EventHandler(this.saveAsMenuItem_Click);
@@ -153,6 +182,8 @@
             // exitMenuItem
             //
             this.exitMenuItem.Name = "exitMenuItem";
+            this.exitMenuItem.ShortcutKeys = System.Windows.Forms.Keys.Alt | System.Windows.Forms.Keys.F4;
+            this.exitMenuItem.ShowShortcutKeys = true;
             this.exitMenuItem.Size = new System.Drawing.Size(180, 22);
             this.exitMenuItem.Text = "E&xit";
             this.exitMenuItem.Click += new System.EventHandler(this.exitMenuItem_Click);
@@ -337,6 +368,7 @@
             // helpMenuItemHelp
             //
             this.helpMenuItemHelp.Name = "helpMenuItemHelp";
+            this.helpMenuItemHelp.ShortcutKeys = System.Windows.Forms.Keys.F1;
             this.helpMenuItemHelp.Size = new System.Drawing.Size(180, 22);
             this.helpMenuItemHelp.Text = "&Help...";
             this.helpMenuItemHelp.Click += new System.EventHandler(this.helpMenuItemHelp_Click);
@@ -344,8 +376,163 @@
             // openFileDialog
             //
             this.openFileDialog.DefaultExt = "db";
-            this.openFileDialog.Filter = "Paradox tables (*.db)|*.db|All files (*.*)|*.*";
-            this.openFileDialog.Title = "Open Paradox Table";
+            this.openFileDialog.Filter = "Paradox tables and SQL scripts (*.db;*.sql)|*.db;*.sql|Paradox tables (*.db)|*.db|SQL scripts (*.sql)|*.sql|All files (*.*)|*.*";
+            this.openFileDialog.Title = "Open";
+            //
+            // editToolStrip
+            //
+            this.editToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.undoToolButton,
+            this.redoToolButton,
+            this.editToolSeparator1,
+            this.cutToolButton,
+            this.copyToolButton,
+            this.pasteToolButton,
+            this.editToolSeparator2,
+            this.selectAllToolButton,
+            this.editToolSeparator3,
+            this.editModeToolButton,
+            this.modifyMemoToolButton});
+            this.editToolStrip.Dock = System.Windows.Forms.DockStyle.Top;
+            this.editToolStrip.Name = "editToolStrip";
+            this.editToolStrip.TabIndex = 1;
+            //
+            // undoToolButton
+            //
+            this.undoToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.undoToolButton.Name = "undoToolButton";
+            this.undoToolButton.Text = "Undo";
+            this.undoToolButton.Click += new System.EventHandler(this.undoMenuItem_Click);
+            //
+            // redoToolButton
+            //
+            this.redoToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.redoToolButton.Name = "redoToolButton";
+            this.redoToolButton.Text = "Redo";
+            this.redoToolButton.Click += new System.EventHandler(this.redoMenuItem_Click);
+            //
+            // editToolSeparator1
+            //
+            this.editToolSeparator1.Name = "editToolSeparator1";
+            //
+            // cutToolButton
+            //
+            this.cutToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.cutToolButton.Name = "cutToolButton";
+            this.cutToolButton.Text = "Cut";
+            this.cutToolButton.Click += new System.EventHandler(this.cutMenuItem_Click);
+            //
+            // copyToolButton
+            //
+            this.copyToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.copyToolButton.Name = "copyToolButton";
+            this.copyToolButton.Text = "Copy";
+            this.copyToolButton.Click += new System.EventHandler(this.copyMenuItem_Click);
+            //
+            // pasteToolButton
+            //
+            this.pasteToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.pasteToolButton.Name = "pasteToolButton";
+            this.pasteToolButton.Text = "Paste";
+            this.pasteToolButton.Click += new System.EventHandler(this.pasteMenuItem_Click);
+            //
+            // editToolSeparator2
+            //
+            this.editToolSeparator2.Name = "editToolSeparator2";
+            //
+            // selectAllToolButton
+            //
+            this.selectAllToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.selectAllToolButton.Name = "selectAllToolButton";
+            this.selectAllToolButton.Text = "Select All";
+            this.selectAllToolButton.Click += new System.EventHandler(this.selectAllMenuItem_Click);
+            //
+            // editToolSeparator3
+            //
+            this.editToolSeparator3.Name = "editToolSeparator3";
+            //
+            // editModeToolButton
+            //
+            this.editModeToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.editModeToolButton.Name = "editModeToolButton";
+            this.editModeToolButton.Text = "Edit Mode";
+            this.editModeToolButton.Click += new System.EventHandler(this.editModeMenuItem_Click);
+            //
+            // modifyMemoToolButton
+            //
+            this.modifyMemoToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.modifyMemoToolButton.Name = "modifyMemoToolButton";
+            this.modifyMemoToolButton.Text = "Modify Memo/Blob";
+            this.modifyMemoToolButton.Click += new System.EventHandler(this.modifyMemoMenuItem_Click);
+            //
+            // recordToolStrip
+            //
+            this.recordToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.insertRecordToolButton,
+            this.deleteRecordToolButton});
+            this.recordToolStrip.Dock = System.Windows.Forms.DockStyle.Top;
+            this.recordToolStrip.Name = "recordToolStrip";
+            this.recordToolStrip.TabIndex = 2;
+            //
+            // insertRecordToolButton
+            //
+            this.insertRecordToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.insertRecordToolButton.Name = "insertRecordToolButton";
+            this.insertRecordToolButton.Text = "Insert";
+            this.insertRecordToolButton.Click += new System.EventHandler(this.insertRecordMenuItem_Click);
+            //
+            // deleteRecordToolButton
+            //
+            this.deleteRecordToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.deleteRecordToolButton.Name = "deleteRecordToolButton";
+            this.deleteRecordToolButton.Text = "Delete";
+            this.deleteRecordToolButton.Click += new System.EventHandler(this.deleteRecordMenuItem_Click);
+            //
+            // tableToolStrip
+            //
+            this.tableToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.infoStructureToolButton,
+            this.modifyStructureToolButton,
+            this.tableRebuildToolButton});
+            this.tableToolStrip.Dock = System.Windows.Forms.DockStyle.Top;
+            this.tableToolStrip.Name = "tableToolStrip";
+            this.tableToolStrip.TabIndex = 3;
+            //
+            // infoStructureToolButton
+            //
+            this.infoStructureToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.infoStructureToolButton.Name = "infoStructureToolButton";
+            this.infoStructureToolButton.Text = "Info Structure";
+            this.infoStructureToolButton.Click += new System.EventHandler(this.infoStructureMenuItem_Click);
+            //
+            // modifyStructureToolButton
+            //
+            this.modifyStructureToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.modifyStructureToolButton.Name = "modifyStructureToolButton";
+            this.modifyStructureToolButton.Text = "Modify Structure";
+            this.modifyStructureToolButton.Click += new System.EventHandler(this.modifyStructureMenuItem_Click);
+            //
+            // tableRebuildToolButton
+            //
+            this.tableRebuildToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.tableRebuildToolButton.Name = "tableRebuildToolButton";
+            this.tableRebuildToolButton.Text = "Table Rebuild";
+            this.tableRebuildToolButton.Click += new System.EventHandler(this.tableRebuildMenuItem_Click);
+            //
+            // sqlToolStrip
+            //
+            this.sqlToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this.runSqlToolButton});
+            this.sqlToolStrip.Dock = System.Windows.Forms.DockStyle.Top;
+            this.sqlToolStrip.Name = "sqlToolStrip";
+            this.sqlToolStrip.TabIndex = 4;
+            //
+            // runSqlToolButton
+            //
+            this.runSqlToolButton.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this.runSqlToolButton.Name = "runSqlToolButton";
+            this.runSqlToolButton.Text = "Run SQL";
+            this.runSqlToolButton.Click += new System.EventHandler(this.runSqlMenuItem_Click);
             //
             // ParadoxDesktopMainForm
             // 
@@ -354,18 +541,31 @@
             this.ClientSize = new System.Drawing.Size(800, 450);
             this.IsMdiContainer = true;
             this.MainMenuStrip = this.menuStrip;
+            this.Controls.Add(this.sqlToolStrip);
+            this.Controls.Add(this.tableToolStrip);
+            this.Controls.Add(this.recordToolStrip);
+            this.Controls.Add(this.editToolStrip);
             this.Controls.Add(this.menuStrip);
             this.Name = "ParadoxDesktopMainForm";
             this.Text = "Paradox Desktop";
             this.MdiChildActivate += new System.EventHandler(this.ParadoxDesktopMainForm_MdiChildActivate);
             this.menuStrip.ResumeLayout(false);
             this.menuStrip.PerformLayout();
+            this.editToolStrip.ResumeLayout(false);
+            this.editToolStrip.PerformLayout();
+            this.recordToolStrip.ResumeLayout(false);
+            this.recordToolStrip.PerformLayout();
+            this.tableToolStrip.ResumeLayout(false);
+            this.tableToolStrip.PerformLayout();
+            this.sqlToolStrip.ResumeLayout(false);
+            this.sqlToolStrip.PerformLayout();
             this.ResumeLayout(false);
             this.PerformLayout();
 
         }
 
         #endregion
+
 
         private System.Windows.Forms.MenuStrip menuStrip;
         private System.Windows.Forms.ToolStripMenuItem newTableMenuItem;
@@ -402,6 +602,27 @@
         private System.Windows.Forms.ToolStripMenuItem helpMenuItem;
         private System.Windows.Forms.ToolStripMenuItem helpMenuItemHelp;
         private System.Windows.Forms.OpenFileDialog openFileDialog;
+        private System.Windows.Forms.ToolStrip editToolStrip;
+        private System.Windows.Forms.ToolStripButton undoToolButton;
+        private System.Windows.Forms.ToolStripButton redoToolButton;
+        private System.Windows.Forms.ToolStripSeparator editToolSeparator1;
+        private System.Windows.Forms.ToolStripButton cutToolButton;
+        private System.Windows.Forms.ToolStripButton copyToolButton;
+        private System.Windows.Forms.ToolStripButton pasteToolButton;
+        private System.Windows.Forms.ToolStripSeparator editToolSeparator2;
+        private System.Windows.Forms.ToolStripButton selectAllToolButton;
+        private System.Windows.Forms.ToolStripSeparator editToolSeparator3;
+        private System.Windows.Forms.ToolStripButton editModeToolButton;
+        private System.Windows.Forms.ToolStripButton modifyMemoToolButton;
+        private System.Windows.Forms.ToolStrip recordToolStrip;
+        private System.Windows.Forms.ToolStripButton insertRecordToolButton;
+        private System.Windows.Forms.ToolStripButton deleteRecordToolButton;
+        private System.Windows.Forms.ToolStrip tableToolStrip;
+        private System.Windows.Forms.ToolStripButton infoStructureToolButton;
+        private System.Windows.Forms.ToolStripButton modifyStructureToolButton;
+        private System.Windows.Forms.ToolStripButton tableRebuildToolButton;
+        private System.Windows.Forms.ToolStrip sqlToolStrip;
+        private System.Windows.Forms.ToolStripButton runSqlToolButton;
     }
 }
 

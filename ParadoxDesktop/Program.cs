@@ -11,7 +11,7 @@ namespace ParadoxDesktop
         /// The main entry point for the application.
         /// </summary>
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -20,7 +20,19 @@ namespace ParadoxDesktop
             Application.ThreadException += Application_ThreadException;
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
 
-            Application.Run(new ParadoxDesktopMainForm());
+            var mainForm = new ParadoxDesktopMainForm();
+
+            if (args.Length == 1 && System.IO.File.Exists(args[0]))
+            {
+                string ext = System.IO.Path.GetExtension(args[0]);
+                if (string.Equals(ext, ".db", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(ext, ".sql", StringComparison.OrdinalIgnoreCase))
+                {
+                    mainForm.Load += (s, e) => mainForm.OpenPath(args[0]);
+                }
+            }
+
+            Application.Run(mainForm);
         }
 
         private static void Application_ThreadException(object sender, System.Threading.ThreadExceptionEventArgs e)

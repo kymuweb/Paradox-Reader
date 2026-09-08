@@ -20,9 +20,62 @@ namespace ParadoxDesktop
     {
         private ParadoxConnection connection;
 
+        public string FilePath { get; private set; }
+
         public SqlEditorForm()
         {
             InitializeComponent();
+        }
+
+        /// <summary>
+        /// Loads a .sql script file's contents into the editor, setting
+        /// <see cref="FilePath"/> and the window title accordingly.
+        /// </summary>
+        public void LoadFromFile(string sqlFilePath)
+        {
+            sqlTextBox.Text = File.ReadAllText(sqlFilePath);
+            FilePath = sqlFilePath;
+            Text = Path.GetFileNameWithoutExtension(sqlFilePath);
+        }
+
+        /// <summary>
+        /// Saves the current editor contents to a new .sql file chosen via a
+        /// Save dialog, updating <see cref="FilePath"/> and the window title
+        /// to the new location on success.
+        /// </summary>
+        public void SaveAs()
+        {
+            using (var dlg = new SaveFileDialog())
+            {
+                dlg.Filter = "SQL scripts (*.sql)|*.sql|All files (*.*)|*.*";
+                dlg.DefaultExt = "sql";
+                if (!string.IsNullOrEmpty(FilePath))
+                {
+                    dlg.FileName = Path.GetFileName(FilePath);
+                    dlg.InitialDirectory = Path.GetDirectoryName(FilePath);
+                }
+                else
+                {
+                    dlg.FileName = "Untitled.sql";
+                }
+
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                try
+                {
+                    File.WriteAllText(dlg.FileName, sqlTextBox.Text);
+                    FilePath = dlg.FileName;
+                    Text = Path.GetFileNameWithoutExtension(dlg.FileName);
+
+                    MessageBox.Show(this, "SQL script saved as:\r\n" + dlg.FileName, "Save As",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "Save As failed:\r\n" + ex.Message, "Save As",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
         }
 
         /// <summary>

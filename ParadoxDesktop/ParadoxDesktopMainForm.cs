@@ -22,6 +22,11 @@ namespace ParadoxDesktop
         public ParadoxDesktopMainForm()
         {
             InitializeComponent();
+
+            editToolStrip.Visible = false;
+            recordToolStrip.Visible = false;
+            tableToolStrip.Visible = false;
+            sqlToolStrip.Visible = false;
         }
 
         private TableEditorForm ActiveTableEditor => ActiveMdiChild as TableEditorForm;
@@ -35,12 +40,18 @@ namespace ParadoxDesktop
 
         private void ParadoxDesktopMainForm_MdiChildActivate(object sender, EventArgs e)
         {
+            bool anyActive = ActiveMdiChild != null;
             bool tableActive = ActiveTableEditor != null;
             bool sqlActive = ActiveSqlEditor != null;
 
             tableMenuItem.Enabled = tableActive;
             recordMenuItem.Enabled = tableActive;
             sqlMenuItem.Enabled = sqlActive;
+
+            editToolStrip.Visible = anyActive;
+            recordToolStrip.Visible = tableActive;
+            tableToolStrip.Visible = tableActive;
+            sqlToolStrip.Visible = sqlActive;
         }
 
         // ----------------------------------------------------------------
@@ -59,6 +70,10 @@ namespace ParadoxDesktop
 
         private void newTableMenuItem_Click(object sender, EventArgs e)
         {
+
+            MessageBox.Show(this, "This is an experimental feature and likely to not work. Suggest you use an alternate method of creating tables for now.", "New Table",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+
             using (var structureForm = new TableStructureForm(TableStructureMode.Create, null))
             {
                 if (structureForm.ShowDialog(this) != DialogResult.OK)
@@ -96,7 +111,39 @@ namespace ParadoxDesktop
             if (openFileDialog.ShowDialog(this) != DialogResult.OK)
                 return;
 
-            OpenTable(openFileDialog.FileName);
+            OpenPath(openFileDialog.FileName);
+        }
+
+        /// <summary>
+        /// Opens <paramref name="path"/> in the appropriate MDI child window
+        /// based on its extension: .sql opens a <see cref="SqlEditorForm"/>
+        /// with the script loaded, anything else (e.g. .db) opens a
+        /// <see cref="TableEditorForm"/>.
+        /// </summary>
+        internal void OpenPath(string path)
+        {
+            if (string.Equals(Path.GetExtension(path), ".sql", StringComparison.OrdinalIgnoreCase))
+                OpenSqlFile(path);
+            else
+                OpenTable(path);
+        }
+
+        internal void OpenSqlFile(string sqlFilePath)
+        {
+            try
+            {
+                var editor = new SqlEditorForm
+                {
+                    MdiParent = this
+                };
+                editor.LoadFromFile(sqlFilePath);
+                editor.Show();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Failed to open SQL file:\r\n" + ex.Message, "Open",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         internal void OpenTable(string dbFilePath)
@@ -118,15 +165,20 @@ namespace ParadoxDesktop
 
         private void saveAsMenuItem_Click(object sender, EventArgs e)
         {
-            var editor = ActiveTableEditor;
-            if (editor == null)
+            if (ActiveTableEditor != null)
             {
-                MessageBox.Show(this, "No table is currently open.", "Save As",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ActiveTableEditor.SaveAs();
                 return;
             }
 
-            editor.SaveAs();
+            if (ActiveSqlEditor != null)
+            {
+                ActiveSqlEditor.SaveAs();
+                return;
+            }
+
+            MessageBox.Show(this, "No table or SQL file is currently open.", "Save As",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void exportMenuItem_Click(object sender, EventArgs e)
@@ -333,7 +385,22 @@ namespace ParadoxDesktop
 
         private void helpMenuItemHelp_Click(object sender, EventArgs e)
         {
-            MessageBox.Show(this, "Help is not yet implemented.", "Help",
+
+            var contribs = new List<string>()
+            {
+                "Javier Garcia (kymuweb)",
+                "Patrick Sims (medilinkps)",
+            };
+
+            var helpMsg = "Paradox-Reader and associated projects by:\r\n";
+            foreach (var contrib in contribs)
+            {
+                helpMsg += $"\r\n{contrib}";
+            }
+            helpMsg += "\r\n\r\nParadox-Reader is licensed under the MIT License.\r\n\r\n" +
+                "For more information, visit:\r\nhttps://github.com/kymuweb/Paradox-Reader";
+
+            MessageBox.Show(this, helpMsg, "Help",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
