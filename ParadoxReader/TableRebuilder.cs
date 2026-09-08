@@ -147,6 +147,7 @@ namespace ParadoxReader
 
         private static TableRebuildResult RebuildCore(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams = false)
         {
+            var overallStopwatch = System.Diagnostics.Stopwatch.StartNew();
             string dbFilePath = table.FilePath;
             string dir = Path.GetDirectoryName(dbFilePath) ?? ".";
             string baseName = Path.GetFileNameWithoutExtension(dbFilePath);
@@ -157,9 +158,13 @@ namespace ParadoxReader
             //    order, so insertion order into the rebuilt table exactly
             //    matches the original physical layout.
             // ------------------------------------------------------------
+            var snapshotStopwatch = System.Diagnostics.Stopwatch.StartNew();
             var records = new List<object[]>();
             foreach (var rec in table.Enumerate())
                 records.Add(rec.DataValues);
+            snapshotStopwatch.Stop();
+            System.Diagnostics.Debug.WriteLine(
+                $"TableRebuilder.RebuildCore [{baseName}]: snapshotted {records.Count} records in {snapshotStopwatch.ElapsedMilliseconds}ms.");
 
             var oldFieldTypes = table.FieldTypes;
             var oldFieldNames = table.FieldNames;
@@ -344,6 +349,7 @@ namespace ParadoxReader
             {
                 newTable = new ParadoxTableFile(tempDbPath);
             }
+            var recordWriteStopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var newFieldTypes = newTable.FieldTypes;
@@ -368,6 +374,10 @@ namespace ParadoxReader
                         migrated++;
                     }
                 }
+                recordWriteStopwatch.Stop();
+                System.Diagnostics.Debug.WriteLine(
+                    $"TableRebuilder.RebuildCore [{baseName}]: reinserted {migrated} records in {recordWriteStopwatch.ElapsedMilliseconds}ms " +
+                    $"({(migrated > 0 ? recordWriteStopwatch.Elapsed.TotalMilliseconds / migrated : 0):F3}ms/record, useMemoryStreams={useMemoryStreams}).");
             }
             finally
             {
@@ -375,8 +385,12 @@ namespace ParadoxReader
                 {
                     // Persist every in-memory temp artifact back to disk
                     // exactly once, now that every record has been migrated.
+                    var flushStopwatch = System.Diagnostics.Stopwatch.StartNew();
                     foreach (var kvp in memStreamsByPath)
                         File.WriteAllBytes(kvp.Key, kvp.Value.ToArray());
+                    flushStopwatch.Stop();
+                    System.Diagnostics.Debug.WriteLine(
+                        $"TableRebuilder.RebuildCore [{baseName}]: flushed {memStreamsByPath.Count} in-memory temp file(s) to disk in {flushStopwatch.ElapsedMilliseconds}ms.");
                 }
 
                 newTable.Dispose();
@@ -470,6 +484,10 @@ namespace ParadoxReader
                 }
             }
 
+
+            overallStopwatch.Stop();
+            System.Diagnostics.Debug.WriteLine(
+                $"TableRebuilder.RebuildCore [{baseName}]: total rebuild time {overallStopwatch.ElapsedMilliseconds}ms for {migrated} records.");
 
             return new TableRebuildResult
             {
