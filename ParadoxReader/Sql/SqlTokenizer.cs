@@ -18,7 +18,8 @@ namespace ParadoxReader.Sql
         private static readonly HashSet<string> Keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
-            "DELETE", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE", "AS"
+            "DELETE", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE", "AS",
+            "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON"
         };
 
         private readonly string text;

@@ -149,6 +149,17 @@ namespace ParadoxReader
             var mod_nr = BitConverter.ToUInt16(blobInfo, leader + 8);
             var offset = BitConverter.ToUInt32(blobInfo, leader) & 0xffffff00;
 
+            if (size > 0 && offset == 0 && index == 0)
+            {
+                // Inline memo: the value fits entirely within the field's inline
+                // "leader" prefix (fSize-10 bytes stored directly in the .DB record)
+                // and was never externalized to the .MB file at all (offset/index
+                // both zero). Verified against SQLRunner reference captures: only the
+                // size field (leader+4..leader+7) is non-zero in this case.
+                byte[] inlineBuffer = new byte[size];
+                Array.Copy(blobInfo, 0, inlineBuffer, 0, Math.Min((int)size, leader));
+                return inlineBuffer;
+            }
 
             if (size > 0)
             {
@@ -220,7 +231,16 @@ namespace ParadoxReader
                 // Blank blob value: free the existing slot (if any) rather than writing
                 // zero-length payload data, and clear the .DB blobInfo pointer bytes so
                 // the field no longer references a (now freed) blob slot.
-                if (oldSize > 0)
+                //
+                // Gate on offset > 0 (a real external .MB allocation), NOT oldSize > 0:
+                // an inline memo (value fits within the field's leader prefix) also has
+                // oldSize > 0 (it stores the text length there) but offset == 0, since it
+                // was never externalized. Treating oldSize > 0 alone as "has a slot to
+                // free" reads bogus data at .MB offset 0 and wrongly bumps the global mod
+                // counter whenever an inline-fitting memo is rewritten (verified against a
+                // SQLRunner reference capture where such a rewrite leaves the .MB file,
+                // including the mod counter at offset 3, completely untouched).
+                if (offset > 0)
                 {
                     this.stream.Position = offset;
                     int freeTypeByte = this.stream.ReadByte();
@@ -250,11 +270,14 @@ namespace ParadoxReader
                 for (int i = 0; i < 10; i++)
                     blobInfo[leader + i] = 0;
 
-                // Increment the .MB file's global modification counter (2-byte word at
-                // offset 3), matching real Paradox/BDE behavior on every blob write.
-                IncrementGlobalModCount();
+                if (offset > 0)
+                {
+                    // Only touch the .MB file's global modification counter when an
+                    // existing external slot was actually freed above.
+                    IncrementGlobalModCount();
+                    this.stream.Flush();
+                }
 
-                this.stream.Flush();
                 return;
             }
 
@@ -279,11 +302,17 @@ namespace ParadoxReader
                 }
             }
 
-            if (oldSize == 0)
+            if (offset == 0)
             {
-                // First-ever write for this field: no block has been allocated yet
-                // (blobInfo/offset/index are all zero — offset 0 is always the MB file
-                // header, never a real data block).  Verified against a real BDE capture:
+                // First-ever EXTERNAL write for this field: no .MB block has been
+                // allocated yet. Gate on offset == 0 (no real external slot), NOT
+                // oldSize == 0: a memo that previously fit inline (within the field's
+                // leader prefix) also has oldSize > 0 (its text length was stored there)
+                // but offset == 0, since it was never externalized. Treating oldSize == 0
+                // alone as "nothing written yet" wrongly takes the overwrite-existing-slot
+                // path below with offset == 0, which reads bogus header bytes at .MB
+                // offset 0 (the file's own header block, never a real data block) instead
+                // of allocating a genuine first block.  Verified against a real BDE capture:
                 // the .MB file grows by exactly one new 4096-byte block, a type-3 block
                 // header is written at its start, and the topmost slot (index 63) is used
                 // for the first blob:

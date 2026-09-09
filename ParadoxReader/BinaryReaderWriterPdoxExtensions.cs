@@ -401,7 +401,7 @@ namespace ParadoxReader
         public static TimeSpan ReadPdoxTime(this BinaryReader reader, int dataSize)
         {
             var msInt = reader.ReadPdoxInt(dataSize);
-            return TimeSpan.FromMilliseconds(msInt >= 0 ? msInt : 0);
+            return TimeSpan.FromMilliseconds((double)(msInt >= 0 ? msInt : 0));
         }
 
         public static void WritePdoxTime(this BinaryWriter writer, TimeSpan value, int dataSize)

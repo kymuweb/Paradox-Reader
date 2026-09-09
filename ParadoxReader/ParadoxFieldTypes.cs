@@ -28,4 +28,40 @@ namespace ParadoxReader
         BCD = 0x17,
         Bytes = 0x18
     }
+
+    public static class ParadoxFieldTypeSizes
+    {
+        /// <summary>
+        /// Returns the fixed, non-negotiable on-disk size (in bytes) for
+        /// <paramref name="type"/>, or null if the field's size is
+        /// user-defined (Alpha, Bytes, BCD).
+        /// </summary>
+        public static byte? GetFixedSize(ParadoxFieldTypes type)
+        {
+            switch (type)
+            {
+                case ParadoxFieldTypes.Short:
+                    return 2;
+                case ParadoxFieldTypes.Long:
+                case ParadoxFieldTypes.AutoInc:
+                    return 4;
+                case ParadoxFieldTypes.Currency:
+                case ParadoxFieldTypes.Number:
+                    return 8;
+                case ParadoxFieldTypes.Date:
+                    return 4;
+                case ParadoxFieldTypes.Time:
+                    return 4;
+                case ParadoxFieldTypes.Timestamp:
+                    return 8;
+                case ParadoxFieldTypes.Logical:
+                    return 1;
+                default:
+                    // Alpha, Bytes, BCD, and Memo/BLOb/OLE/Graphic (whose "size" is a
+                    // different, user-meaningful property - e.g. max in-place length -
+                    // rather than a fixed on-disk reference width): user-defined size.
+                    return null;
+            }
+        }
+    }
 }

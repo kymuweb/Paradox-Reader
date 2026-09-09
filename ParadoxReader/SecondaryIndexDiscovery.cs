@@ -18,29 +18,33 @@ namespace ParadoxReader
             string dir    = Path.GetDirectoryName(dbFilePath) ?? ".";
             string name   = Path.GetFileNameWithoutExtension(dbFilePath);
 
-            // Non-incremental secondary indexes: .X00 - .X99
-            TryScanPattern(dir, name, "X",  padWidth: 2, from: 0, to: 99,  allFields, primaryKeyFieldCount, result);
+            // Non-incremental secondary indexes: .X00 - .XFF (hex 1-based
+            // field number of the first indexed field - confirmed
+            // empirically against a real BDE-created table, e.g.
+            // C:\medilink32bnt\data\!transac.X06/.X07/.X08/.X0B/.X0F/.X17).
+            TryScanPattern(dir, name, "X",  hex: true,  padWidth: 2, from: 0, to: 0xFF, allFields, primaryKeyFieldCount, result);
 
-            // Incremental secondary indexes: .XG0 - .XG9
-            TryScanPattern(dir, name, "XG", padWidth: 1, from: 0, to: 9,   allFields, primaryKeyFieldCount, result);
+            // Incremental (composite) secondary indexes: .XG0 - .XG9
+            TryScanPattern(dir, name, "XG", hex: false, padWidth: 1, from: 0, to: 9,   allFields, primaryKeyFieldCount, result);
 
-            // Maintained-field companions to non-incremental indexes: .Y00 - .Y99
-            TryScanPattern(dir, name, "Y",  padWidth: 2, from: 0, to: 99,  allFields, primaryKeyFieldCount, result);
+            // Maintained-field companions to non-incremental indexes: .Y00 - .YFF
+            TryScanPattern(dir, name, "Y",  hex: true,  padWidth: 2, from: 0, to: 0xFF, allFields, primaryKeyFieldCount, result);
 
             // Maintained-field companions to incremental indexes: .YG0 - .YG9
-            TryScanPattern(dir, name, "YG", padWidth: 1, from: 0, to: 9,   allFields, primaryKeyFieldCount, result);
+            TryScanPattern(dir, name, "YG", hex: false, padWidth: 1, from: 0, to: 9,   allFields, primaryKeyFieldCount, result);
 
             return result;
         }
 
         private static void TryScanPattern(
-            string dir, string baseName, string prefix,
+            string dir, string baseName, string prefix, bool hex,
             int padWidth, int from, int to,
             ParadoxFile.FieldInfo[] allFields, int primaryKeyFieldCount, List<SecondaryIndexInfo> result)
         {
             for (int i = from; i <= to; i++)
             {
-                string ext  = $".{prefix}{i.ToString().PadLeft(padWidth, '0')}";
+                string number = hex ? i.ToString("X").PadLeft(padWidth, '0') : i.ToString().PadLeft(padWidth, '0');
+                string ext  = $".{prefix}{number}";
                 string path = Path.Combine(dir, baseName + ext);
                 if (!File.Exists(path)) continue;
 

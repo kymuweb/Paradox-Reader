@@ -43,13 +43,36 @@ namespace ParadoxReader
             entrySize     = keyDataSize + POINTER_SIZE;
             blockCapacity = this.maxTableSize * 0x400 - HEADER_SIZE;
 
-            // BDE/Pdxrbld considers an index out of date if its own
-            // autoIncVal (offset 0x49) doesn't match the parent .DB's after
-            // an AutoInc field is assigned. Flag it here (without throwing)
-            // so callers can check IsOutOfDate; Enumerate still throws if
-            // actually used.
-            if (table.autoIncVal != 0 && this.autoIncVal != table.autoIncVal)
-                IsOutOfDate = true;
+            // Historically flagged as out of date whenever this index's own
+            // autoIncVal (offset 0x49) didn't match the parent .DB's.
+            // DISPROVEN by direct comparison against a real,
+            // BDE-confirmed-good Pdxrbld rebuild of a real corpus table
+            // (PatientBlobs, 135 rows): its own .PX autoIncVal was 1 while
+            // the .DB's was 135 - every index file legitimately tracks its
+            // own independent autoIncVal, unrelated to the parent .DB's.
+            // No longer used as an out-of-date signal.
+        }
+
+        /// <summary>
+        /// Opens this read-side .PX handle against an already-open
+        /// <paramref name="pxStream"/> (e.g. a <see cref="MemoryStream"/>)
+        /// rather than a file on disk. <paramref name="filePath"/> is
+        /// retained only for <see cref="FilePath"/> reporting/diagnostics.
+        /// Used by <see cref="TableRebuilder"/>'s optional in-memory
+        /// rebuild path.
+        /// </summary>
+        internal ParadoxPrimaryKey(ParadoxFile table, Stream pxStream, string filePath)
+            : base(pxStream)
+        {
+            this.table = table;
+            this.FilePath = filePath;
+
+            this.primaryKeyFieldsArray = table.FieldTypes.Take(table.primaryKeyFields).ToArray();
+            foreach (var f in this.primaryKeyFieldsArray)
+                keyDataSize += f.fSize;
+
+            entrySize     = keyDataSize + POINTER_SIZE;
+            blockCapacity = this.maxTableSize * 0x400 - HEADER_SIZE;
         }
 
         /// <summary>

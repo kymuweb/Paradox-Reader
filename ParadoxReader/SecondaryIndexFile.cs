@@ -53,6 +53,15 @@ namespace ParadoxReader
         // XgnFile types use 0-based block numbers; all others (YgnFile, XnnFile) use 1-based.
         private readonly ushort      blockBase;
 
+        // Tracks the last known record count reported per .DB block (1-based
+        // dbBlockNumber) via OnBlockChanged. Needed because narrow-pointer
+        // index formats (pointerSize < 6, e.g. 2) never persist RecordCount
+        // on disk - it always reads back as 0 - so entry.RecordCount cannot
+        // be trusted as "the previous count" when computing deltas for the
+        // index's own RecordCount header field (@0x06).
+        private readonly System.Collections.Generic.Dictionary<ushort, int> blockRecordCounts =
+            new System.Collections.Generic.Dictionary<ushort, int>();
+
         /// <summary>
         /// Full path to the underlying .Xnn/.Xgn/.Ynn/.Ygn index file.
         /// </summary>
@@ -106,6 +115,19 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         internal SecondaryIndexFile(string indexFilePath, ParadoxFile.FieldInfo[] indexedFields, int[] fieldIndices)
+            : this(new FileStream(indexFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite), indexFilePath, indexedFields, fieldIndices)
+        {
+        }
+
+        /// <summary>
+        /// Opens a secondary index whose data is backed by an already-open
+        /// <paramref name="indexStream"/> (e.g. a <see cref="MemoryStream"/>)
+        /// rather than a file on disk. <paramref name="indexFilePath"/> is
+        /// retained only for <see cref="FilePath"/> reporting/diagnostics.
+        /// Used by <see cref="TableRebuilder"/>'s optional in-memory
+        /// rebuild path.
+        /// </summary>
+        internal SecondaryIndexFile(Stream indexStream, string indexFilePath, ParadoxFile.FieldInfo[] indexedFields, int[] fieldIndices)
         {
             FilePath           = indexFilePath;
             this.indexedFields = indexedFields;
@@ -114,7 +136,7 @@ namespace ParadoxReader
             foreach (var f in indexedFields)
                 keyDataSize += f.fSize;
 
-            indexFile     = new ParadoxFile(indexFilePath);
+            indexFile     = new ParadoxFile(indexStream);
 
             // The entry pointer width varies by index file (2 bytes observed
             // for some .Xgn/.Ygn files, 6 bytes - blockNumber + recordCount +
@@ -187,14 +209,39 @@ namespace ParadoxReader
 
             byte[] keyData = KeySerializer.Serialize(ExtractIndexValues(firstRowAllFieldValues), indexedFields);
 
+            // Previous count known for this block, if any (see blockRecordCounts
+            // field comment: entry.RecordCount cannot be trusted for narrow
+            // pointer formats since it is never persisted/read back from disk).
+            int previousCount;
+            blockRecordCounts.TryGetValue(dbBlockNumber, out previousCount);
+
             if (indexFile.stream.Length <= indexFile.headerSize || indexFile.RecordCount <= 0)
             {
-                var newLeaf = AllocateBlock();
+                // A freshly rebuilt/created skeleton (see TableRebuilder /
+                // ParadoxHeaderBuilder) already has one empty root block
+                // pre-allocated (matching BDE/SQLRunner's on-disk layout, which
+                // never omits it even for a brand-new empty index), so on the
+                // very first insert into such a file we must reuse that
+                // existing block rather than calling AllocateBlock() and
+                // appending a second one (which would leave a dangling,
+                // never-referenced empty block at the end of the file and
+                // grow it past BDE's expected size).
+                PxBlock newLeaf = indexFile.stream.Length > indexFile.headerSize
+                    ? new PxBlock { BlockNumber = blockBase, Capacity = blockCapacity }
+                    : AllocateBlock();
                 newLeaf.Entries.Add(new PxEntry(keyData, dbBlockNumber, (ushort)recordCount));
                 WriteBlock(newLeaf);
                 UpdateRootBlockId(newLeaf.BlockNumber);
                 UpdateLevelCount(1);
-                UpdateRecordCount(indexFile.RecordCount + 1);
+                // RecordCount (@0x06) semantics vary by this index's pointer
+                // width, confirmed against real pdxrbld output: wide-pointer
+                // formats (pointerSize >= 6, e.g. .YG0) track the number of
+                // leaf-entries/blocks in the index, while narrow-pointer
+                // formats (pointerSize < 6, e.g. .XG0) track the total number
+                // of table rows represented by the index (mirroring the
+                // parent .DB's own RecordCount).
+                UpdateRecordCount(indexFile.RecordCount + RowCountDelta(previousCount, recordCount, isNewEntry: true));
+                blockRecordCounts[dbBlockNumber] = recordCount;
                 return;
             }
 
@@ -202,14 +249,37 @@ namespace ParadoxReader
             if (existing.Block != null)
             {
                 var entry = existing.Block.Entries[existing.Index];
+                int delta = RowCountDelta(previousCount, recordCount, isNewEntry: false);
                 entry.KeyData     = keyData;
                 entry.RecordCount = (ushort)recordCount;
                 WriteBlock(existing.Block);
+                if (delta != 0)
+                    UpdateRecordCount(indexFile.RecordCount + delta);
+                blockRecordCounts[dbBlockNumber] = recordCount;
                 return;
             }
 
             BTreeInsert(new PxEntry(keyData, dbBlockNumber, (ushort)recordCount));
-            UpdateRecordCount(indexFile.RecordCount + 1);
+            UpdateRecordCount(indexFile.RecordCount + RowCountDelta(previousCount, recordCount, isNewEntry: true));
+            blockRecordCounts[dbBlockNumber] = recordCount;
+        }
+
+        /// <summary>
+        /// Computes the delta to apply to this index's own RecordCount
+        /// header field (@0x06) for a block whose reported row count changed
+        /// from <paramref name="previousCount"/> (0 if this is a brand-new
+        /// leaf entry) to <paramref name="newCount"/>. Semantics are
+        /// confirmed against real pdxrbld output: wide-pointer formats
+        /// (pointerSize >= 6, e.g. .YG0) count leaf-entries/blocks (so a new
+        /// entry contributes +1, an existing one contributes 0), while
+        /// narrow-pointer formats (pointerSize &lt; 6, e.g. .XG0) count total
+        /// table rows (so the delta is simply the row-count change).
+        /// </summary>
+        private int RowCountDelta(int previousCount, int newCount, bool isNewEntry)
+        {
+            if (pointerSize >= 6)
+                return isNewEntry ? 1 : 0;
+            return newCount - previousCount;
         }
 
         /// <summary>
@@ -449,16 +519,20 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Mirrors the parent .DB file's V4Hdr changeCount4 (offset 0x70) into
-        /// this index file. BDE/Pdxrbld compares this "table version" counter
-        /// against the index's own copy to decide whether the index is out
-        /// of date.
+        /// Previously mirrored the parent .DB file's V4Hdr changeCount4
+        /// (offset 0x70) into this index file. Disproven by direct
+        /// experiment: a 4-case SQLRunner matrix showed the secondary
+        /// index's changeCount4 is always 0 in both SQLRunner-created
+        /// originals and BDE's own Pdxrbld rebuilds, regardless of the
+        /// .DB's own changeCount4/record count. Mirroring it here corrupted
+        /// every rebuilt secondary index (changeCount4 ended up matching
+        /// the migrated record count instead of staying 0), which
+        /// contributes to Paradox 7's "Index is out of date" on rebuilt
+        /// tables. So this is a no-op again.
         /// </summary>
         public void SyncTableVersion(short changeCount4)
         {
-            indexFile.stream.Position = ParadoxHeaderOffsets.ChangeCount4;
-            using (var w = new BinaryWriter(new NonClosingStreamWrapper(indexFile.stream), Encoding.Default))
-                w.Write(changeCount4);
+            // Intentionally no-op; see summary above.
         }
 
         /// <summary>
@@ -581,8 +655,24 @@ namespace ParadoxReader
         {
             var found = FindEntryForBlock(blockNumber);
             if (found.Block == null) return;
-            byte[] key = found.Block.Entries[found.Index].KeyData;
-            BTreeDelete(key);
+            var entry = found.Block.Entries[found.Index];
+            byte[] key = entry.KeyData;
+            // Capture the block's row count before deleting the entry, so
+            // RecordCount (@0x06) can be decremented by the actual number of
+            // rows removed, not just 1 (see OnBlockChanged/UpdateRecordCount).
+            // entry.RecordCount is not reliable for narrow pointer formats
+            // (never persisted on disk), so use the in-memory bookkeeping
+            // populated by OnBlockChanged instead.
+            int removedRowCount;
+            if (!blockRecordCounts.TryGetValue(blockNumber, out removedRowCount))
+                removedRowCount = entry.RecordCount;
+            blockRecordCounts.Remove(blockNumber);
+            // See RowCountDelta: wide-pointer formats track leaf-entry/block
+            // count (decrement by 1 per removed entry), narrow-pointer
+            // formats track total table rows (decrement by the actual
+            // number of rows the removed block held).
+            int recordCountDecrement = pointerSize >= 6 ? 1 : removedRowCount;
+            BTreeDelete(key, recordCountDecrement);
         }
 
         // ----------------------------------------------------------------
@@ -603,15 +693,43 @@ namespace ParadoxReader
                 var newRoot = AllocateBlock();
                 newRoot.LeftChildBlockNumber = indexFile.pxRootBlockId;
                 SplitChild(newRoot, 0, root);
+                // Update the level count BEFORE recursing into InsertNonFull so
+                // IsLeafAtDepth (which relies on indexFile.pxLevelCount to know
+                // the tree's current depth) sees the post-split depth. This
+                // level-count-based check is only trustworthy for a tree we
+                // are actively building/maintaining ourselves (as here), since
+                // we update pxLevelCount consistently on every split/merge -
+                // unlike EnumerateNode's block-range heuristic below, which
+                // exists specifically because pxLevelCount is unreliable on
+                // arbitrary pre-existing real-world index files.
+                UpdateLevelCount((byte)(indexFile.pxLevelCount + 1));
                 InsertNonFull(newRoot, entry);
                 WriteBlock(newRoot);
                 UpdateRootBlockId(newRoot.BlockNumber);
-                UpdateLevelCount((byte)(indexFile.pxLevelCount + 1));
             }
             else
             {
                 InsertNonFull(root, entry);
             }
+        }
+
+        /// <summary>
+        /// Leaf classification for the insert write-path, based on this
+        /// index's own authoritative pxLevelCount rather than the ambiguous
+        /// block-number-range heuristic in <see cref="IsLeafNode"/>. That
+        /// heuristic misclassifies a leaf's entries as branch pointers when a
+        /// leaf entry's .DB block number happens to fall inside this index
+        /// file's own (small) valid block range - a real, reproducible case
+        /// on small freshly-rebuilt tables (e.g. a 6-row table whose leaf
+        /// entries reference .DB blocks 1-6, indistinguishable by number
+        /// alone from this index's own block 1). Since we are the ones
+        /// building/maintaining this tree via BTreeInsert/SplitChild, our own
+        /// pxLevelCount is always accurate for it, making a depth comparison
+        /// unambiguous.
+        /// </summary>
+        private bool IsLeafAtDepth(int depth)
+        {
+            return depth >= Math.Max(indexFile.pxLevelCount - 1, 0);
         }
 
         private void InsertNonFull(PxBlock node, PxEntry entry, int depth = 0)
@@ -622,7 +740,7 @@ namespace ParadoxReader
                     "the index file appears to be corrupt or cyclic. Consider using TableRebuilder.Rebuild to rebuild the table and its indexes.");
 
             int i = node.Entries.Count - 1;
-            if (IsLeafNode(node))
+            if (IsLeafAtDepth(depth))
             {
                 node.Entries.Add(null);
                 while (i >= 0 && CompareKeys(entry.KeyData, node.Entries[i].KeyData) < 0)
@@ -671,7 +789,7 @@ namespace ParadoxReader
         // removed, so its leaf entry must be removed entirely)
         // ----------------------------------------------------------------
 
-        private void BTreeDelete(byte[] keyData)
+        private void BTreeDelete(byte[] keyData, int removedRowCount = 1)
         {
             System.Diagnostics.Debug.WriteLine(
                 $"[SecondaryIndexFile.BTreeDelete] rootBlock={indexFile.pxRootBlockId}, " +
@@ -689,7 +807,9 @@ namespace ParadoxReader
                 if (indexFile.pxLevelCount > 0)
                     UpdateLevelCount((byte)(indexFile.pxLevelCount - 1));
             }
-            UpdateRecordCount(indexFile.RecordCount - 1);
+            // See OnBlockChanged/UpdateRecordCount: RecordCount (@0x06) tracks
+            // total rows represented by this index, not block-entry count.
+            UpdateRecordCount(indexFile.RecordCount - removedRowCount);
         }
 
         private void DeleteFromNode(PxBlock node, byte[] keyData, int depth = 0)
@@ -848,11 +968,15 @@ namespace ParadoxReader
             // Keep the index file's own block-chain bookkeeping fields (nextBlock,
             // fileBlocks, firstBlock, lastBlock @ 0xA-0x11) in sync with the
             // actual number of allocated blocks. BDE/Pdxrbld considers the index
-            // out of date/corrupt if these aren't updated.
+            // out of date/corrupt if these aren't updated. These track the
+            // 1-based ordinal count of allocated blocks, independent of
+            // blockBase (which only affects PxEntry pointer encoding) - a
+            // pdxrbld-rebuilt XgnFile (0-based blockBase) still has
+            // nextBlock/firstBlock/lastBlock == 1 for its first block, not 0.
             ushort blockCountFromBase = (ushort)(n - blockBase + 1);
-            if (blockCountFromBase == 1) indexFile.firstBlock = n;
-            indexFile.nextBlock  = n;
-            indexFile.lastBlock  = n;
+            if (blockCountFromBase == 1) indexFile.firstBlock = blockCountFromBase;
+            indexFile.nextBlock  = blockCountFromBase;
+            indexFile.lastBlock  = blockCountFromBase;
             indexFile.fileBlocks = blockCountFromBase;
             indexFile.stream.Position = ParadoxHeaderOffsets.BlockChain;
             using (var w = new BinaryWriter(new NonClosingStreamWrapper(indexFile.stream), Encoding.Default))
@@ -909,9 +1033,13 @@ namespace ParadoxReader
 
         /// <summary>
         /// Keeps this index file's own RecordCount header field (@ 0x06, int32)
-        /// in sync with the number of leaf entries (one per .DB block) stored
-        /// in the index. BDE/Pdxrbld considers the index out of date/corrupt
-        /// if this doesn't match the actual number of leaf entries.
+        /// in sync with the total number of table rows represented across all
+        /// of this index's leaf entries (summed per-block record counts),
+        /// mirroring the parent .DB's own RecordCount. Real BDE/Paradox
+        /// clients (e.g. Paradox 7) validate this field against the .DB's
+        /// RecordCount and consider the index out of date/corrupt if it
+        /// doesn't match - it is NOT simply the number of leaf entries
+        /// (one per .DB block), which is a distinct, smaller quantity.
         /// </summary>
         private void UpdateRecordCount(int recordCount)
         {

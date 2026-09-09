@@ -11,23 +11,25 @@ namespace ParadoxDesktop
 {
     /// <summary>
     /// Floating MDI child window that displays and edits a single Paradox
-    /// table via a <see cref="DataGridView"/>. All rows are loaded into an
-    /// in-memory <see cref="DataTable"/> for simple two-way grid binding;
-    /// edits are pushed back to the underlying <see cref="ParadoxTableFile"/>
-    /// via <see cref="UpdateRecord"/> as cells are committed.
+    /// table via a <see cref="DataGridView"/> running in virtual mode. Rows
+    /// are decoded from the underlying <see cref="ParadoxTableFile"/> only
+    /// on demand (as the grid actually needs them for display/scrolling),
+    /// via <see cref="RowCursor"/>, instead of loading the entire table into
+    /// memory up front. Edits are pushed back to the table via
+    /// <see cref="ParadoxTableFile.UpdateRecord"/> as cells are committed.
     /// </summary>
     public partial class TableEditorForm : Form
     {
         private ParadoxTableFile table;
-        private DataTable dataTable;
-        private BindingSource bindingSource;
-
-        // Parallel to the DataTable rows: the ParadoxRecord each row came from,
-        // so edits can be written back to the correct block/record position.
-        private List<ParadoxRecord> rowRecords;
+        private RowCursor rowCursor;
 
         private bool editModeEnabled;
-        private bool suppressCellChangeHandling;
+
+        private readonly UndoRedoManager undoRedoManager = new UndoRedoManager();
+
+        // Guards CellValuePushed so that values applied by Undo/Redo aren't
+        // themselves recorded as new history entries.
+        private bool suppressHistory;
 
         public string TableFilePath => table?.FilePath;
 
@@ -36,9 +38,10 @@ namespace ParadoxDesktop
         public TableEditorForm(string dbFilePath)
         {
             InitializeComponent();
-            bindingSource = new BindingSource();
-            dataGridView.AutoGenerateColumns = true;
-            dataGridView.CellValueChanged += dataGridView_CellValueChanged;
+            dataGridView.AutoGenerateColumns = false;
+            dataGridView.VirtualMode = true;
+            dataGridView.CellValueNeeded += dataGridView_CellValueNeeded;
+            dataGridView.CellValuePushed += dataGridView_CellValuePushed;
             dataGridView.CurrentCellDirtyStateChanged += dataGridView_CurrentCellDirtyStateChanged;
             LoadTable(dbFilePath);
         }
@@ -55,48 +58,76 @@ namespace ParadoxDesktop
             if (table.IndexOutOfDate)
             {
                 statusLabel.Text = "Warning: one or more indexes are out of date. Use Table > Table Rebuild to fix.";
+
+                var response = MessageBox.Show(this,
+                    "One or more indexes for this table are out of date.\r\n\r\n" +
+                    "Would you like to rebuild the table now?\r\n" +
+                    "Otherwise, you'll only be able to read the rows.",
+                    "Index Out Of Date", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+                if (response == DialogResult.Yes)
+                {
+                    RebuildTable();
+                    return;
+                }
             }
 
-            RebuildGridFromTable();
+            SetupGrid();
         }
 
         /// <summary>
-        /// (Re)builds the in-memory DataTable/grid contents from the current
-        /// state of <see cref="table"/>. Called on initial load and after a
-        /// rebuild replaces the underlying files.
+        /// (Re)builds the grid's column list and row cursor from the current
+        /// state of <see cref="table"/>. Called on initial load and whenever
+        /// the underlying block layout changes (rebuild, insert, delete).
+        /// This is cheap even for very large tables: it only scans block
+        /// headers/record counts, not individual field values, so no per-row
+        /// decoding happens until the grid actually asks for a specific
+        /// visible cell via <see cref="dataGridView_CellValueNeeded"/>.
         /// </summary>
-        private void RebuildGridFromTable()
+        private void SetupGrid()
         {
-            suppressCellChangeHandling = true;
+            dataGridView.RowCount = 0;
+            dataGridView.Columns.Clear();
+
+            for (int i = 0; i < table.FieldNames.Length; i++)
+            {
+                var fieldType = table.FieldTypes[i];
+                var column = new DataGridViewTextBoxColumn
+                {
+                    Name = table.FieldNames[i],
+                    HeaderText = table.FieldNames[i],
+                    ValueType = ColumnClrType(fieldType.fType),
+                    ReadOnly = !editModeEnabled,
+                };
+                dataGridView.Columns.Add(column);
+            }
+
+            rowCursor = new RowCursor(table);
+
+            // Setting RowCount directly with RowHeadersWidthSizeMode set to
+            // AutoSizeToAllHeaders makes WinForms re-measure every existing
+            // row header (via the visual styles COM renderer) each time a
+            // row is added, which is O(n) expensive COM calls on the UI
+            // thread with no message pumping in between. For large tables
+            // this can run long enough to trip the CLR's
+            // ContextSwitchDeadlock MDA. Temporarily switch to a fixed
+            // sizing mode for the bulk row-count change, then restore
+            // auto-sizing (which then only measures once).
+            var savedRowHeadersWidthSizeMode = dataGridView.RowHeadersWidthSizeMode;
+            dataGridView.RowHeadersWidthSizeMode = DataGridViewRowHeadersWidthSizeMode.DisableResizing;
             try
             {
-                dataTable = new DataTable();
-                for (int i = 0; i < table.FieldNames.Length; i++)
-                {
-                    var fieldType = table.FieldTypes[i];
-                    dataTable.Columns.Add(table.FieldNames[i], ColumnClrType(fieldType.fType));
-                }
-
-                rowRecords = new List<ParadoxRecord>();
-                foreach (var record in table.Enumerate())
-                {
-                    var row = dataTable.NewRow();
-                    for (int i = 0; i < record.DataValues.Length && i < dataTable.Columns.Count; i++)
-                        row[i] = ToGridValue(record.DataValues[i]);
-                    dataTable.Rows.Add(row);
-                    rowRecords.Add(record);
-                }
-
-                bindingSource.DataSource = dataTable;
-                dataGridView.DataSource = bindingSource;
-
-                statusLabel.Text = string.Format("{0} record(s). {1}", table.RecordCount,
-                    editModeEnabled ? "Edit mode ON" : "Read-only (F9 to edit)");
+                dataGridView.RowCount = rowCursor.TotalRows;
             }
             finally
             {
-                suppressCellChangeHandling = false;
+                dataGridView.RowHeadersWidthSizeMode = savedRowHeadersWidthSizeMode;
             }
+
+            undoRedoManager.Clear();
+
+            statusLabel.Text = string.Format("{0} record(s). {1}", table.RecordCount,
+                editModeEnabled ? "Edit mode ON" : "Read-only (F9 to edit)");
         }
 
         /// <summary>Maps a Paradox field type to the CLR type used for its grid column.</summary>
@@ -149,6 +180,8 @@ namespace ParadoxDesktop
         {
             editModeEnabled = !editModeEnabled;
             dataGridView.ReadOnly = !editModeEnabled;
+            foreach (DataGridViewColumn column in dataGridView.Columns)
+                column.ReadOnly = !editModeEnabled;
             statusLabel.Text = editModeEnabled
                 ? string.Format("{0} record(s). Edit mode ON", table.RecordCount)
                 : string.Format("{0} record(s). Read-only (F9 to edit)", table.RecordCount);
@@ -160,35 +193,204 @@ namespace ParadoxDesktop
                 dataGridView.CommitEdit(DataGridViewDataErrorContexts.Commit);
         }
 
-        private void dataGridView_CellValueChanged(object sender, DataGridViewCellEventArgs e)
+        /// <summary>
+        /// Supplies the display value for a single grid cell on demand, decoding
+        /// only the requested row's record from the underlying table (via
+        /// <see cref="RowCursor"/>) rather than the whole table up front.
+        /// </summary>
+        private void dataGridView_CellValueNeeded(object sender, DataGridViewCellValueEventArgs e)
         {
-            if (suppressCellChangeHandling) return;
-            if (e.RowIndex < 0 || e.RowIndex >= rowRecords.Count) return;
+            var record = rowCursor.GetRecord(e.RowIndex);
+            if (record == null || e.ColumnIndex >= record.DataValues.Length)
+            {
+                e.Value = null;
+                return;
+            }
 
-            CommitRowToTable(e.RowIndex);
+            e.Value = ToGridValue(record.DataValues[e.ColumnIndex]);
         }
 
-        private void CommitRowToTable(int rowIndex)
+        /// <summary>
+        /// Applies a grid-edited cell value back to the underlying record and
+        /// persists it via <see cref="ParadoxTableFile.UpdateRecord"/>.
+        /// </summary>
+        private void dataGridView_CellValuePushed(object sender, DataGridViewCellValueEventArgs e)
         {
-            var record = rowRecords[rowIndex];
-            var newValues = record.CloneDataValues();
+            var record = rowCursor.GetRecord(e.RowIndex);
+            if (record == null) return;
 
-            var dataRow = dataTable.Rows[rowIndex];
-            for (int i = 0; i < newValues.Length && i < dataTable.Columns.Count; i++)
-            {
-                var gridValue = dataRow[i];
-                newValues[i] = FromGridValue(newValues[i], gridValue);
-            }
+            var newValues = record.CloneDataValues();
+            if (e.ColumnIndex >= newValues.Length) return;
+
+            object oldValue = newValues[e.ColumnIndex];
+            object newValue = FromGridValue(oldValue, e.Value);
+
+            newValues[e.ColumnIndex] = newValue;
 
             try
             {
                 table.UpdateRecord(record, newValues);
+                statusLabel.Text = "Record updated.";
+
+                if (!suppressHistory)
+                    undoRedoManager.Push(new CellEditAction(this, e.RowIndex, e.ColumnIndex, oldValue, newValue));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Failed to save change:\r\n" + ex.Message, "Update",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Applies a single cell value directly to the underlying record and
+        /// persists it, without going through the grid's push/pull cycle.
+        /// Used by <see cref="CellEditAction"/> to replay Undo/Redo.
+        /// </summary>
+        private void ApplyCellValue(int rowIndex, int columnIndex, object value)
+        {
+            var record = rowCursor.GetRecord(rowIndex);
+            if (record == null) return;
+
+            var newValues = record.CloneDataValues();
+            if (columnIndex >= newValues.Length) return;
+
+            newValues[columnIndex] = value;
+
+            try
+            {
+                table.UpdateRecord(record, newValues);
+                dataGridView.InvalidateCell(columnIndex, rowIndex);
                 statusLabel.Text = "Record updated.";
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, "Failed to save change:\r\n" + ex.Message, "Update",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// A single cell edit recorded on the undo/redo history stack. Undo
+        /// restores the original value; Redo re-applies the edited value.
+        /// </summary>
+        private sealed class CellEditAction : IUndoableAction
+        {
+            private readonly TableEditorForm form;
+            private readonly int rowIndex;
+            private readonly int columnIndex;
+            private readonly object oldValue;
+            private readonly object newValue;
+
+            public CellEditAction(TableEditorForm form, int rowIndex, int columnIndex, object oldValue, object newValue)
+            {
+                this.form = form;
+                this.rowIndex = rowIndex;
+                this.columnIndex = columnIndex;
+                this.oldValue = oldValue;
+                this.newValue = newValue;
+            }
+
+            public void Undo()
+            {
+                form.suppressHistory = true;
+                try
+                {
+                    form.ApplyCellValue(rowIndex, columnIndex, oldValue);
+                }
+                finally
+                {
+                    form.suppressHistory = false;
+                }
+            }
+
+            public void Redo()
+            {
+                form.suppressHistory = true;
+                try
+                {
+                    form.ApplyCellValue(rowIndex, columnIndex, newValue);
+                }
+                finally
+                {
+                    form.suppressHistory = false;
+                }
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Edit menu (Undo/Redo/Cut/Copy/Paste/Select All)
+        // ----------------------------------------------------------------
+
+        public void Undo()
+        {
+            if (!undoRedoManager.CanUndo) return;
+            undoRedoManager.Undo();
+        }
+
+        public void Redo()
+        {
+            if (!undoRedoManager.CanRedo) return;
+            undoRedoManager.Redo();
+        }
+
+        public void Cut()
+        {
+            if (!editModeEnabled) return;
+            Copy();
+            ClearSelectedCells();
+        }
+
+        public void Copy()
+        {
+            if (dataGridView.GetCellCount(DataGridViewElementStates.Selected) == 0) return;
+            var dataObject = dataGridView.GetClipboardContent();
+            if (dataObject != null)
+                Clipboard.SetDataObject(dataObject);
+        }
+
+        public void Paste()
+        {
+            if (!editModeEnabled) return;
+            if (!Clipboard.ContainsText()) return;
+
+            string clipboardText = Clipboard.GetText();
+            var lines = clipboardText.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
+
+            var currentCell = dataGridView.CurrentCell;
+            if (currentCell == null) return;
+
+            int startRow = currentCell.RowIndex;
+            int startCol = currentCell.ColumnIndex;
+
+            for (int r = 0; r < lines.Length; r++)
+            {
+                int rowIndex = startRow + r;
+                if (rowIndex >= dataGridView.RowCount) break;
+
+                var cells = lines[r].Split('\t');
+                for (int c = 0; c < cells.Length; c++)
+                {
+                    int colIndex = startCol + c;
+                    if (colIndex >= dataGridView.ColumnCount) break;
+                    if (dataGridView.Columns[colIndex].ReadOnly) continue;
+
+                    dataGridView[colIndex, rowIndex].Value = cells[c];
+                }
+            }
+        }
+
+        public void SelectAllCells()
+        {
+            dataGridView.SelectAll();
+        }
+
+        private void ClearSelectedCells()
+        {
+            foreach (DataGridViewCell cell in dataGridView.SelectedCells)
+            {
+                if (!cell.OwningColumn.ReadOnly)
+                    cell.Value = null;
             }
         }
 
@@ -222,6 +424,16 @@ namespace ParadoxDesktop
                 ModifyCurrentMemoOrBlob();
                 e.Handled = true;
             }
+            else if (e.KeyCode == Keys.Insert && e.Modifiers == Keys.None)
+            {
+                InsertRecord();
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Delete && e.Modifiers == Keys.Control)
+            {
+                DeleteCurrentRecord();
+                e.Handled = true;
+            }
         }
 
         private void dataGridView_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
@@ -252,9 +464,16 @@ namespace ParadoxDesktop
         {
             if (table == null || dataGridView.CurrentCell == null) return;
 
+            if (!editModeEnabled)
+            {
+                MessageBox.Show(this, "Enable Edit Mode (F9) before modifying a memo/blob field.", "Modify Memo/Blob",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
             int rowIndex = dataGridView.CurrentCell.RowIndex;
             int colIndex = dataGridView.CurrentCell.ColumnIndex;
-            if (rowIndex < 0 || colIndex < 0 || rowIndex >= rowRecords.Count) return;
+            if (rowIndex < 0 || colIndex < 0 || rowIndex >= rowCursor.TotalRows) return;
 
             if (!IsMemoOrBlobColumn(colIndex))
             {
@@ -263,7 +482,9 @@ namespace ParadoxDesktop
                 return;
             }
 
-            var record = rowRecords[rowIndex];
+            var record = rowCursor.GetRecord(rowIndex);
+            if (record == null) return;
+
             var fieldType = table.FieldTypes[colIndex].fType;
             var currentValue = record.DataValues[colIndex];
 
@@ -277,7 +498,7 @@ namespace ParadoxDesktop
                 try
                 {
                     table.UpdateRecord(record, newValues);
-                    dataTable.Rows[rowIndex][colIndex] = ToGridValue(newValues[colIndex]);
+                    dataGridView.InvalidateCell(colIndex, rowIndex);
                     statusLabel.Text = "Memo/blob field updated.";
                 }
                 catch (Exception ex)
@@ -285,6 +506,113 @@ namespace ParadoxDesktop
                     MessageBox.Show(this, "Failed to save change:\r\n" + ex.Message, "Modify Memo/Blob",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Insert record (Ins)
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Appends a new blank record to the table (via <see cref="ParadoxTableFile.AppendRecord"/>)
+        /// and adds a corresponding blank row to the grid, ready for editing.
+        /// </summary>
+        public void InsertRecord()
+        {
+            if (table == null) return;
+
+            if (!editModeEnabled)
+            {
+                MessageBox.Show(this, "Enable Edit Mode (F9) before inserting a record.", "Insert Record",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                var blankValues = new object[table.FieldTypes.Length];
+                for (int i = 0; i < blankValues.Length; i++)
+                {
+                    if (table.FieldTypes[i].fType == ParadoxFieldTypes.MemoBLOb ||
+                        table.FieldTypes[i].fType == ParadoxFieldTypes.FmtMemoBLOb)
+                        blankValues[i] = new MemoValue(string.Empty, null);
+                }
+
+                table.AppendRecord(blankValues);
+
+                // A new block may have been allocated (or the last block's
+                // record count changed), so refresh the row cursor's block
+                // map rather than trying to patch it incrementally.
+                rowCursor.Refresh();
+                dataGridView.RowCount = rowCursor.TotalRows;
+                undoRedoManager.Clear();
+
+                int newRowIndex = rowCursor.TotalRows - 1;
+                dataGridView.ClearSelection();
+                if (newRowIndex >= 0)
+                    dataGridView.CurrentCell = dataGridView.Rows[newRowIndex].Cells[0];
+
+                statusLabel.Text = string.Format("{0} record(s). Record inserted.", table.RecordCount);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Failed to insert record:\r\n" + ex.Message, "Insert Record",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Delete record (Ctrl+Del)
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Deletes the record backing the currently selected grid row (via
+        /// <see cref="ParadoxTableFile.DeleteRecord"/>) after confirmation, and
+        /// removes the corresponding row from the grid. Note: this only removes
+        /// the .DB record; any memo/blob content it referenced in the .MB file
+        /// is left orphaned (unreferenced) until the table is rebuilt via
+        /// Table &gt; Table Rebuild, which reclaims the space.
+        /// </summary>
+        public void DeleteCurrentRecord()
+        {
+            if (table == null || dataGridView.CurrentCell == null) return;
+
+            if (!editModeEnabled)
+            {
+                MessageBox.Show(this, "Enable Edit Mode (F9) before deleting a record.", "Delete Record",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            int rowIndex = dataGridView.CurrentCell.RowIndex;
+            if (rowIndex < 0 || rowIndex >= rowCursor.TotalRows) return;
+
+            var confirm = MessageBox.Show(this, "Delete the selected record? This cannot be undone.",
+                "Delete Record", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes) return;
+
+            try
+            {
+                var record = rowCursor.GetRecord(rowIndex);
+                if (record == null) return;
+
+                table.DeleteRecord(record);
+
+                // Every row after the deleted one shifted down one slot within its
+                // block (see ParadoxTableFile.DeleteRecord), so the cached
+                // block/record positions for subsequent rows in the same block are
+                // now stale. Refreshing the cursor is the simplest way to stay
+                // consistent.
+                rowCursor.Refresh();
+                dataGridView.RowCount = rowCursor.TotalRows;
+                undoRedoManager.Clear();
+
+                statusLabel.Text = string.Format("{0} record(s). Record deleted.", table.RecordCount);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Failed to delete record:\r\n" + ex.Message, "Delete Record",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -353,11 +681,14 @@ namespace ParadoxDesktop
                     {
                         writer.WriteLine(string.Join(",", table.FieldNames.Select(CsvEscape).ToArray()));
 
-                        foreach (DataRow row in dataTable.Rows)
+                        foreach (var record in table.Enumerate())
                         {
-                            var fields = new string[dataTable.Columns.Count];
-                            for (int i = 0; i < dataTable.Columns.Count; i++)
-                                fields[i] = CsvEscape(row[i] == DBNull.Value ? string.Empty : Convert.ToString(row[i]));
+                            var fields = new string[table.FieldNames.Length];
+                            for (int i = 0; i < fields.Length && i < record.DataValues.Length; i++)
+                            {
+                                var gridValue = ToGridValue(record.DataValues[i]);
+                                fields[i] = CsvEscape(gridValue == null || gridValue == DBNull.Value ? string.Empty : Convert.ToString(gridValue));
+                            }
                             writer.WriteLine(string.Join(",", fields));
                         }
                     }
@@ -389,8 +720,54 @@ namespace ParadoxDesktop
         {
             if (table == null) return;
 
-            using (var infoForm = new TableInfoForm(table))
-                infoForm.ShowDialog(this);
+            using (var structureForm = new TableStructureForm(table))
+                structureForm.ShowDialog(this);
+        }
+
+        public void ModifyStructure()
+        {
+            if (table == null) return;
+
+            string dbFilePath = table.FilePath;
+
+            bool useMemoryStreams = true; // TODO: either ask or make this a configurable setting in an options menu and saved in %programdata% or a config file etc. for now i'm testing it so it'll be true.
+
+            using (var structureForm = new TableStructureForm(TableStructureMode.Modify, table))
+            {
+                if (structureForm.ShowDialog(this) != DialogResult.OK)
+                    return;
+
+                var newSchema = structureForm.Schema;
+                var tableToRebuild = table;
+                table = null; // RebuildProgressForm's operation takes ownership/disposes it.
+
+                var progressForm = RebuildProgressForm.RunModal(this, "Modifying Structure...",
+                    (progress, cancellationToken) => TableRebuilder.RebuildWithSchema(
+                        tableToRebuild, newSchema, tempTableName: null, useMemoryStreams: useMemoryStreams,
+                        progress: progress, cancellationToken: cancellationToken));
+
+                table = new ParadoxTableFile(dbFilePath);
+                SetupGrid();
+
+                if (progressForm.WasCancelled)
+                {
+                    MessageBox.Show(this, "Modify structure was cancelled.", "Modify Structure",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else if (progressForm.Error != null)
+                {
+                    MessageBox.Show(this, "Modify structure failed:\r\n" + progressForm.Error.Message, "Modify Structure",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    var result = progressForm.Result;
+                    MessageBox.Show(this,
+                        string.Format("Structure updated. {0} record(s) migrated across {1} file(s).",
+                            result.RecordsMigrated, result.RebuiltFiles.Count),
+                        "Modify Structure", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
         }
 
         // ----------------------------------------------------------------
@@ -403,26 +780,36 @@ namespace ParadoxDesktop
 
             string dbFilePath = table.FilePath;
 
-            try
-            {
-                var result = TableRebuilder.Rebuild(table);
-                table = new ParadoxTableFile(dbFilePath);
-                RebuildGridFromTable();
+            bool useMemoryStreams = true; // TODO: either ask or make this a configurable setting in an options menu and saved in %programdata% or a config file etc. for now i'm testing it so it'll be true.
 
+            var tableToRebuild = table;
+            table = null; // RebuildProgressForm's operation takes ownership/disposes it.
+
+            var progressForm = RebuildProgressForm.RunModal(this, "Rebuilding Table...",
+                (progress, cancellationToken) => TableRebuilder.Rebuild(
+                    tableToRebuild, tempTableName: null, useMemoryStreams: useMemoryStreams,
+                    progress: progress, cancellationToken: cancellationToken));
+
+            table = new ParadoxTableFile(dbFilePath);
+            SetupGrid();
+
+            if (progressForm.WasCancelled)
+            {
+                MessageBox.Show(this, "Table rebuild was cancelled.", "Table Rebuild",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else if (progressForm.Error != null)
+            {
+                MessageBox.Show(this, "Rebuild failed:\r\n" + progressForm.Error.Message, "Table Rebuild",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else
+            {
+                var result = progressForm.Result;
                 MessageBox.Show(this,
                     string.Format("Rebuild complete. {0} record(s) migrated across {1} file(s).",
                         result.RecordsMigrated, result.RebuiltFiles.Count),
                     "Table Rebuild", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                // TableRebuilder.Rebuild disposes the table even on failure paths that
-                // already got past opening it; reopen so this editor window stays usable.
-                table = new ParadoxTableFile(dbFilePath);
-                RebuildGridFromTable();
-
-                MessageBox.Show(this, "Rebuild failed:\r\n" + ex.Message, "Table Rebuild",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

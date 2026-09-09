@@ -29,9 +29,9 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         private readonly string          filePath; // Full path to the .DB file (not just the file name).
-        private readonly BlockManager    blockManager;
-        private readonly IndexManager    indexManager;
-        private readonly ParadoxFileLock fileLock;
+        private BlockManager    blockManager;
+        private IndexManager    indexManager;
+        private ParadoxFileLock fileLock;
         private short                    tableVersion;
 
         public ParadoxPrimaryKey PrimaryKeyIndex;
@@ -39,6 +39,20 @@ namespace ParadoxReader
 
         /// <summary>FilePath to this table's .DB file.</summary>
         public string FilePath => filePath;
+
+        /// <summary>
+        /// Holds the .LCK write lock for the duration of the returned scope,
+        /// regardless of how many individual insert/update/delete calls
+        /// happen within it. Normally each of those calls acquires and
+        /// releases the lock on its own (writing/deleting the .LCK file
+        /// every time), which is wasted disk I/O when many records are
+        /// being written back-to-back in a single logical operation (e.g.
+        /// <see cref="TableRebuilder"/> reinserting every record during a
+        /// rebuild). Wrap such a loop in
+        /// <c>using (table.AcquireScopedBatchWriteLock())</c> so the .LCK
+        /// file is written once at the start and removed once at the end.
+        /// </summary>
+        internal ParadoxFileLock.ScopedWriteLock AcquireScopedBatchWriteLock() => fileLock.AcquireScopedWriteLock();
 
         /// <summary>
         /// True if any index file (.PX/.Xnn/.Xgn/.Ynn/.Ygn) associated with
@@ -81,7 +95,60 @@ namespace ParadoxReader
         public ParadoxTableFile(string filePath) : base(filePath)
         {
             this.filePath = filePath;
+            InitializeAfterHeaderRead(filePath);
+        }
 
+        /// <summary>
+        /// Opens a table whose .DB data is backed by an already-open
+        /// <paramref name="dbStream"/> (e.g. a <see cref="MemoryStream"/>)
+        /// rather than a file on disk, while still using
+        /// <paramref name="filePath"/> to locate/manage associated files
+        /// (.PX, .Xnn/.Xgn/.Ynn/.Ygn, .MB) and the .LCK lock file, and to
+        /// report via <see cref="FilePath"/>. Used by
+        /// <see cref="TableRebuilder"/>'s optional in-memory rebuild path
+        /// to avoid per-record disk flushes while reinserting records;
+        /// the caller is responsible for persisting the stream's final
+        /// contents back to <paramref name="filePath"/> once finished.
+        /// </summary>
+        internal ParadoxTableFile(Stream dbStream, string filePath) : base(dbStream)
+        {
+            this.filePath = filePath;
+            InitializeAfterHeaderRead(filePath);
+        }
+
+        /// <summary>
+        /// Opens a table whose .DB data is backed by <paramref name="dbStream"/>,
+        /// and whose associated index/blob files (.PX, .Xnn/.Xgn/.Ynn/.Ygn, .MB)
+        /// are backed by the streams supplied in
+        /// <paramref name="associatedFileStreams"/> (keyed by each file's full
+        /// path), instead of being opened from disk. Any associated file
+        /// present on disk but absent from <paramref name="associatedFileStreams"/>
+        /// is still opened normally from disk. Used by
+        /// <see cref="TableRebuilder"/>'s optional in-memory rebuild path so
+        /// that no rebuild artifact touches disk until the caller explicitly
+        /// persists each stream's final contents.
+        /// </summary>
+        internal ParadoxTableFile(Stream dbStream, string filePath, IDictionary<string, Stream> associatedFileStreams) : base(dbStream)
+        {
+            this.filePath = filePath;
+            InitializeAfterHeaderRead(filePath, associatedFileStreams);
+        }
+
+        /// <summary>
+        /// Convenience constructor matching the old ParadoxTable(dbPath, tableName) signature.
+        /// </summary>
+        public ParadoxTableFile(string dbPath, string tableName)
+            : this(Path.Combine(dbPath, tableName?.EnsureEndsWith(DOT_DB)))
+        {
+        }
+
+        /// <summary>
+        /// Shared post-header-read initialization for both the disk-backed
+        /// and stream-backed constructors: sets up block/index management,
+        /// file locking, and associated-file discovery.
+        /// </summary>
+        private void InitializeAfterHeaderRead(string filePath, IDictionary<string, Stream> associatedFileStreams = null)
+        {
             blockManager = new BlockManager(
                 stream,
                 headerSize,
@@ -93,11 +160,12 @@ namespace ParadoxReader
                 filePath,
                 FieldTypes,
                 primaryKeyFields,
-                autoIncVal);
+                autoIncVal,
+                associatedFileStreams);
 
             fileLock = new ParadoxFileLock(filePath);
 
-            DiscoverAssociatedFiles(filePath);
+            DiscoverAssociatedFiles(filePath, associatedFileStreams);
 
             // changeCount4 lives at a fixed physical offset (0x70) even when the
             // file's version is too old for V4Header to be parsed (fileVersionID < 5).
@@ -116,18 +184,17 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Convenience constructor matching the old ParadoxTable(dbPath, tableName) signature.
-        /// </summary>
-        public ParadoxTableFile(string dbPath, string tableName)
-            : this(Path.Combine(dbPath, tableName?.EnsureEndsWith(DOT_DB)))
-        {
-        }
-
-        /// <summary>
         /// Locates and opens the associated .PX (primary key index) and
         /// .MB (blob/memo) files alongside the .DB file, if present.
         /// </summary>
-        private void DiscoverAssociatedFiles(string dbFilePath)
+        /// <summary>
+        /// Locates and opens the associated .PX (primary key index) and
+        /// .MB (blob/memo) files alongside the .DB file, if present. When
+        /// <paramref name="associatedFileStreams"/> supplies a stream for a
+        /// discovered file's full path, that stream is used in place of
+        /// opening the file from disk.
+        /// </summary>
+        private void DiscoverAssociatedFiles(string dbFilePath, IDictionary<string, Stream> associatedFileStreams = null)
         {
             var dbPath              = Path.GetDirectoryName(dbFilePath);
             var tableNameWithExt    = Path.GetFileName(dbFilePath);
@@ -142,13 +209,17 @@ namespace ParadoxReader
                 if (Path.GetFileNameWithoutExtension(file).EndsWith(DOT_PX, StringComparison.OrdinalIgnoreCase) ||
                     Path.GetExtension(file).Equals(DOT_PX, StringComparison.OrdinalIgnoreCase))
                 {
-                    this.PrimaryKeyIndex = new ParadoxPrimaryKey(this, file);
+                    this.PrimaryKeyIndex = associatedFileStreams != null && associatedFileStreams.TryGetValue(file, out var pxStream)
+                        ? new ParadoxPrimaryKey(this, pxStream, file)
+                        : new ParadoxPrimaryKey(this, file);
                     //break; // I'm not sure we can guarantee that PX will be found after MB.
                 }
                 if (Path.GetFileNameWithoutExtension(file).EndsWith(DOT_MB, StringComparison.OrdinalIgnoreCase) ||
                     Path.GetExtension(file).Equals(DOT_MB, StringComparison.OrdinalIgnoreCase))
                 {
-                    this.BlobFile = new ParadoxBlobFile(file);
+                    this.BlobFile = associatedFileStreams != null && associatedFileStreams.TryGetValue(file, out var mbStream)
+                        ? new ParadoxBlobFile(mbStream)
+                        : new ParadoxBlobFile(file);
                 }
             }
         }
@@ -470,7 +541,7 @@ namespace ParadoxReader
         /// regardless of whether V4Header was parsed (older fileVersionIDs
         /// don't parse it, but the header region and byte still exist).
         /// </summary>
-        private void IncrementTableVersion()
+        private short IncrementTableVersion()
         {
             short newValue = (short)((V4Header?.changeCount4 ?? tableVersion) + 1);
             tableVersion = newValue;
@@ -479,6 +550,8 @@ namespace ParadoxReader
             stream.Position = ParadoxHeaderOffsets.ChangeCount4;
             using (var w = new BinaryWriter(new NonClosingStreamWrapper(stream), Encoding.Default))
                 w.Write(newValue);
+
+            return newValue;
         }
 
         /// <summary>
@@ -530,7 +603,8 @@ namespace ParadoxReader
 
             indexManager.SyncChangeCount(changeCount1, changeCount2);
 
-            IncrementTableVersion();
+            short newTableVersion = IncrementTableVersion();
+            indexManager.SyncTableVersion(newTableVersion);
 
             indexManager.IncrementWriteCounter();
         }

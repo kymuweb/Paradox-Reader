@@ -29,6 +29,7 @@ namespace ParadoxReader
         private          FileStream lckStream;
         private          Mutex      mutex;
         private          bool       isLocked;
+        private          int        lockDepth;
 
         // ----------------------------------------------------------------
         // Constructor
@@ -49,12 +50,22 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         /// <summary>
-        /// Acquires an exclusive write lock.
+        /// Acquires an exclusive write lock. Reentrant: nested
+        /// Acquire/Release pairs (e.g. an outer batch scope wrapping many
+        /// individual per-record operations, as used by
+        /// <see cref="ParadoxTableFile.AcquireScopedBatchWriteLock"/>) only
+        /// take the underlying mutex/.LCK file once, on the outermost call;
+        /// the .LCK file is only written/deleted once for the whole batch
+        /// instead of once per nested call, avoiding redundant disk I/O.
         /// Blocks until the lock is available or the timeout expires.
         /// </summary>
         public void AcquireWriteLock()
         {
-            if (isLocked) return;
+            if (isLocked)
+            {
+                lockDepth++;
+                return;
+            }
 
             // 1. In-process mutex
             mutex = new Mutex(false, mutexName);
@@ -82,7 +93,8 @@ namespace ParadoxReader
                     lckStream.SetLength(0);
                     lckStream.WriteByte(0x01); // Write-lock sentinel
                     lckStream.Flush();
-                    isLocked = true;
+                    isLocked  = true;
+                    lockDepth = 1;
                     return;
                 }
                 catch (IOException)
@@ -101,11 +113,22 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Releases the write lock, allowing BDE and other processes to proceed.
+        /// Releases the write lock, allowing BDE and other processes to
+        /// proceed. Reentrant: when the lock was acquired via nested calls
+        /// to <see cref="AcquireWriteLock"/>, this only decrements the
+        /// nesting depth until the outermost call releases it, so the
+        /// .LCK file is only deleted once the outermost scope completes.
         /// </summary>
         public void ReleaseWriteLock()
         {
             if (!isLocked) return;
+
+            if (lockDepth > 1)
+            {
+                lockDepth--;
+                return;
+            }
+
             try
             {
                 lckStream?.SetLength(0);
@@ -119,7 +142,8 @@ namespace ParadoxReader
             finally
             {
                 ReleaseMutex();
-                isLocked = false;
+                isLocked  = false;
+                lockDepth = 0;
             }
         }
 

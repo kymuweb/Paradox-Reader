@@ -71,7 +71,6 @@ namespace ParadoxTest
         // it's never committed. SQLRunner is used to independently verify
         // (via SELECT) that writes performed by ParadoxReader are visible
         // to BDE, and to run Pdxrbld-equivalent consistency checks.
-        private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
 
         // Paradox/BDE has historical issues with long paths and permissions on
         // some folders (Program Files, deeply nested repo paths, etc.), so all
@@ -126,8 +125,8 @@ namespace ParadoxTest
         public static void EnsureCleanState()
         {
             Directory.CreateDirectory(TestFolder);
-            EnsureNoSqlRunnerProcessesRunning();
-            DeleteStaleLockFilesWithRetry();
+            SqlRunner.EnsureNoStrayProcesses();
+            SqlRunner.DeleteLockFiles(TestFolder);
         }
 
         private static void RunStandardTestSuite()
@@ -430,6 +429,109 @@ namespace ParadoxTest
             return values;
         }
 
+        // --------------------------------------------------------------------
+        // Fresh-table rebuild diagnostic: create a brand-new table via
+        // SQLRunner (real BDE), rebuild it with TableRebuilder, and compare
+        // against the untouched SQLRunner-created original. This isolates
+        // whether TableRebuilder itself corrupts an otherwise-known-good
+        // table, independent of any pre-existing corruption in a corpus
+        // table such as PatientBlobs. Run twice: once against an empty
+        // table (0 records) and once after inserting exactly 1 record, so
+        // the two runs bracket the smallest possible reproduction.
+        // --------------------------------------------------------------------
+
+        /// <summary>
+        /// Usage: ParadoxTest.exe freshrebuildtest [insertCount]
+        /// Creates FRESHRBLD.DB (AUTOINC PK + one SMALLINT secondary-indexed
+        /// column) via SQLRunner from scratch, optionally inserts
+        /// <paramref name="insertCount"/> row(s) via SQLRunner, snapshots the
+        /// pristine SQLRunner-created files, rebuilds a copy via
+        /// TableRebuilder.Rebuild, then compares rebuilt vs. pristine.
+        /// </summary>
+        public static void RunFreshRebuildTest(int insertCount)
+        {
+            if (!SqlRunner.IsAvailable)
+            {
+                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunner.ExePath);
+                return;
+            }
+
+            const string workDir = @"c:\temp\freshrebuildtest";
+            const string baseName = "FRESHRBLD";
+
+            Directory.CreateDirectory(workDir);
+            foreach (var f in Directory.GetFiles(workDir))
+            {
+                try { File.Delete(f); } catch { /* best effort */ }
+            }
+
+            string tablePath = Path.Combine(workDir, baseName + ".DB");
+
+            Console.WriteLine("=== [freshrebuildtest] Creating fresh table via SQLRunner ===");
+            RunDiagSqlRunner(workDir,
+                "CREATE TABLE '" + tablePath + "' (" +
+                "ID AUTOINC, " +
+                "SECVAL SMALLINT, " +
+                "PRIMARY KEY (ID))");
+            RunDiagSqlRunner(workDir, "CREATE INDEX SECIDX ON '" + tablePath + "' (SECVAL)");
+
+            if (!File.Exists(tablePath))
+            {
+                Console.WriteLine("[freshrebuildtest] SQLRunner did not produce {0}; aborting.", tablePath);
+                return;
+            }
+
+            for (int i = 1; i <= insertCount; i++)
+            {
+                RunDiagSqlRunner(workDir, "INSERT INTO '" + tablePath + "' (SECVAL) VALUES (" + i + ")");
+            }
+
+            int actualCount;
+            using (var t = new ParadoxTableFile(tablePath))
+                actualCount = t.Enumerate().Count();
+            Console.WriteLine("[freshrebuildtest] Pristine table has {0} record(s) (requested {1}).", actualCount, insertCount);
+
+            // Snapshot the pristine SQLRunner-created files before rebuilding,
+            // so the "before" state survives TableRebuilder's in-place swap.
+            const string pristineDirName = "pristine";
+            string pristineDir = Path.Combine(workDir, pristineDirName);
+            Directory.CreateDirectory(pristineDir);
+            foreach (var src in Directory.GetFiles(workDir, baseName + ".*"))
+            {
+                File.Copy(src, Path.Combine(pristineDir, baseName + "_pristine" + Path.GetExtension(src)), overwrite: true);
+            }
+
+            Console.WriteLine("=== [freshrebuildtest] Rebuilding via TableRebuilder ===");
+            var result = TableRebuilder.Rebuild(tablePath);
+            Console.WriteLine("[freshrebuildtest] Rebuild migrated {0} record(s).", result.RecordsMigrated);
+
+            string rebuiltDir = Path.Combine(workDir, "rebuilt");
+            Directory.CreateDirectory(rebuiltDir);
+            foreach (var src in Directory.GetFiles(workDir, baseName + ".*"))
+            {
+                File.Copy(src, Path.Combine(rebuiltDir, baseName + "_rebuilt" + Path.GetExtension(src)), overwrite: true);
+            }
+
+            Console.WriteLine("=== [freshrebuildtest] Verifying rebuilt table opens without IndexOutOfDate ===");
+            try
+            {
+                using (var t = new ParadoxTableFile(tablePath))
+                {
+                    Console.WriteLine("  IndexOutOfDate = {0}", t.IndexOutOfDate);
+                    int postCount = t.Enumerate().Count();
+                    Console.WriteLine("  Post-rebuild record count = {0}", postCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  [FAIL] Opening rebuilt table threw: {0}: {1}", ex.GetType().Name, ex.Message);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("=== [freshrebuildtest] Comparing pristine (SQLRunner) vs. rebuilt (TableRebuilder) ===");
+            RunCompareRebuildMode(pristineDir, baseName + "_pristine", rebuiltDir, baseName + "_rebuilt");
+        }
+
         private static string FieldValueToComparableString(object value)
         {
             switch (value)
@@ -490,9 +592,9 @@ namespace ParadoxTest
         /// </summary>
         private static void RunSqlRunnerOnlyMode()
         {
-            if (!File.Exists(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
-                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunnerExePath);
+                Console.WriteLine("SQLRunner not found at {0}; aborting.", SqlRunner.ExePath);
                 return;
             }
 
@@ -812,6 +914,145 @@ namespace ParadoxTest
             Console.WriteLine(anyDiff ? "Comparison complete: differences found (see above)." : "Comparison complete: all matched files are byte-identical.");
         }
 
+        /// <summary>
+        /// Byte-compares two arbitrary table "families" (all files sharing a
+        /// base name, e.g. PatientBlobs_ourrebuild.DB/.MB/.PX/.XG0/.YG0) found
+        /// in two different directories (or the same directory, different
+        /// base names), matched purely by file extension. Intended for
+        /// re-running the historical "our rebuild vs. pdxrbld rebuild"
+        /// comparison, e.g.:
+        ///   ParadoxTest.exe comparerebuild c:\temp\paradoxtest PatientBlobs_ourrebuild PatientBlobs_pdxrbldrebuild
+        /// </summary>
+        public static void RunCompareRebuildMode(string dir, string baseNameA, string baseNameB)
+        {
+            RunCompareRebuildMode(dir, baseNameA, dir, baseNameB);
+        }
+
+        public static void RunCompareRebuildMode(string dirA, string baseNameA, string dirB, string baseNameB)
+        {
+            if (!Directory.Exists(dirA)) { Console.WriteLine("[comparerebuild] Directory not found: {0}", dirA); return; }
+            if (!Directory.Exists(dirB)) { Console.WriteLine("[comparerebuild] Directory not found: {0}", dirB); return; }
+
+            var aFiles = Directory.GetFiles(dirA, baseNameA + ".*")
+                .ToDictionary(f => Path.GetExtension(f).ToUpperInvariant(), f => f);
+            var bFiles = Directory.GetFiles(dirB, baseNameB + ".*")
+                .ToDictionary(f => Path.GetExtension(f).ToUpperInvariant(), f => f);
+
+            if (aFiles.Count == 0) { Console.WriteLine("[comparerebuild] No files found matching {0}.* in {1}", baseNameA, dirA); return; }
+            if (bFiles.Count == 0) { Console.WriteLine("[comparerebuild] No files found matching {0}.* in {1}", baseNameB, dirB); return; }
+
+            var allExts = aFiles.Keys.Union(bFiles.Keys).OrderBy(e => e, StringComparer.Ordinal).ToList();
+
+            bool anyDiff = false;
+            foreach (var ext in allExts)
+            {
+                if (!aFiles.TryGetValue(ext, out var aPath)) { Console.WriteLine("[{0}] MISSING on A side ({1})", ext, baseNameA); anyDiff = true; continue; }
+                if (!bFiles.TryGetValue(ext, out var bPath)) { Console.WriteLine("[{0}] MISSING on B side ({1})", ext, baseNameB); anyDiff = true; continue; }
+
+                if (CompareTwoTableFiles(ext, aPath, bPath))
+                    anyDiff = true;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine(anyDiff ? "Comparison complete: differences found (see above)." : "Comparison complete: all matched files are byte-identical.");
+        }
+
+        /// <summary>
+        /// Byte-compares a single pair of files (same logical extension,
+        /// e.g. both ".DB"), reporting size mismatch / byte-level diffs and,
+        /// for .DB files, a decoded DbHeaderSnapshot field diff. Shared by
+        /// CompareStepSnapshots and RunCompareRebuildMode. Returns true if
+        /// any difference was found.
+        /// </summary>
+        private static bool CompareTwoTableFiles(string label, string aPath, string bPath)
+        {
+            var aBytes = File.ReadAllBytes(aPath);
+            var bBytes = File.ReadAllBytes(bPath);
+            bool isDb = label.EndsWith(".DB", StringComparison.OrdinalIgnoreCase) ||
+                        Path.GetExtension(aPath).Equals(".DB", StringComparison.OrdinalIgnoreCase);
+
+            if (aBytes.Length != bBytes.Length)
+            {
+                Console.WriteLine("[{0}] SIZE MISMATCH: a={1} bytes ({2}), b={3} bytes ({4})", label, aBytes.Length, aPath, bBytes.Length, bPath);
+
+                if (isDb)
+                {
+                    try
+                    {
+                        var aHdr = DbHeaderSnapshot.Read(aPath);
+                        var bHdr = DbHeaderSnapshot.Read(bPath);
+                        foreach (var d in aHdr.DiffAgainst(bHdr))
+                            Console.WriteLine("    header diff: {0}", d);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("    [warn] could not decode headers: {0}", ex.Message);
+                    }
+                }
+                return true;
+            }
+
+            var diffOffsets = new List<int>();
+            for (int i = 0; i < aBytes.Length; i++)
+            {
+                if (aBytes[i] != bBytes[i]) diffOffsets.Add(i);
+            }
+
+            if (diffOffsets.Count == 0)
+            {
+                Console.WriteLine("[{0}] MATCH ({1} bytes)", label, aBytes.Length);
+                return false;
+            }
+
+            // Some header bytes are known to hold raw in-memory pointer
+            // values from whichever process last wrote the file, not
+            // persisted table state, so they are expected to differ between
+            // engines even when the actual table state is identical:
+            // unknown12x13 (0x12-0x13), unknownPtr1A/pointer (0x1A-0x1D),
+            // tableNamePtrPtr (0x30-0x33), fldInfoPtr (0x34-0x37).
+            bool IsKnownVolatile(int offset) =>
+                (offset >= 0x12 && offset <= 0x13) ||
+                (offset >= 0x1A && offset <= 0x1D) ||
+                (offset >= 0x30 && offset <= 0x33) ||
+                (offset >= 0x34 && offset <= 0x37);
+
+            var meaningfulOffsets = isDb
+                ? diffOffsets.Where(o => !IsKnownVolatile(o)).ToList()
+                : diffOffsets;
+
+            var first = diffOffsets.Take(10).Select(o => $"0x{o:X} (a={aBytes[o]:X2} b={bBytes[o]:X2})");
+            Console.WriteLine("[{0}] DIFF: {1} byte(s) differ ({2} after filtering known-volatile pointer bytes). First offsets: {3}{4}",
+                label, diffOffsets.Count, meaningfulOffsets.Count, string.Join(", ", first.ToArray()), diffOffsets.Count > 10 ? ", ..." : "");
+
+            if (meaningfulOffsets.Count > 0 && meaningfulOffsets.Count != diffOffsets.Count)
+            {
+                var firstMeaningful = meaningfulOffsets.Take(10).Select(o => $"0x{o:X} (a={aBytes[o]:X2} b={bBytes[o]:X2})");
+                Console.WriteLine("    meaningful (non-pointer) offsets: {0}{1}",
+                    string.Join(", ", firstMeaningful.ToArray()), meaningfulOffsets.Count > 10 ? ", ..." : "");
+            }
+
+            if (isDb)
+            {
+                try
+                {
+                    var aHdr = DbHeaderSnapshot.Read(aPath);
+                    var bHdr = DbHeaderSnapshot.Read(bPath);
+                    var headerDiffs = aHdr.DiffAgainst(bHdr).ToList();
+                    if (headerDiffs.Count == 0)
+                        Console.WriteLine("    header fields match; diff is confined to record/data area.");
+                    else
+                        foreach (var d in headerDiffs)
+                            Console.WriteLine("    header diff: {0}", d);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("    [warn] could not decode headers: {0}", ex.Message);
+                }
+            }
+
+            return true;
+        }
+
         // --------------------------------------------------------------------
         // Setup
         // --------------------------------------------------------------------
@@ -827,7 +1068,7 @@ namespace ParadoxTest
 
             // Clear stale *.LCK files left behind by a prior SQLRunner/BDE
             // session (e.g. PDOXUSRS.LCK) before touching anything else.
-            DeleteStaleLockFiles();
+            SqlRunner.DeleteLockFiles(TestFolder);
 
             // Delete individual table/index/blob files rather than the whole
             // directory: BDE (via SQLRunner) leaves behind a PDOXUSRS.LCK
@@ -1235,9 +1476,9 @@ namespace ParadoxTest
         /// </summary>
         private static void TestVerifyWithSqlRunner()
         {
-            if (!File.Exists(SqlRunnerExePath))
+            if (!SqlRunner.IsAvailable)
             {
-                Console.WriteLine("SQLRunner not found at {0}; skipping BDE verification.", SqlRunnerExePath);
+                Console.WriteLine("SQLRunner not found at {0}; skipping BDE verification.", SqlRunner.ExePath);
                 return;
             }
 
@@ -1517,73 +1758,10 @@ namespace ParadoxTest
         }
 
         /// <summary>
-        /// Minimal, self-contained SQLRunner invocation for xg0diag mode
-        /// (mirrors CorpusTest.RunSqlRunner).
+        /// Minimal, self-contained SQLRunner invocation for xg0diag mode.
+        /// Delegates to the consolidated <see cref="SqlRunner"/> helper.
         /// </summary>
-        private static void RunDiagSqlRunner(string workDir, string sql)
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName               = SqlRunnerExePath,
-                Arguments              = $"/S \"{sql}\"",
-                UseShellExecute        = false,
-                RedirectStandardInput  = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            using (var process = new Process { StartInfo = psi })
-            {
-                // Drain stdout/stderr asynchronously - SQLRunner can write enough
-                // output to fill the redirected pipe buffer, which would otherwise
-                // deadlock the process (and cause WaitForExit to time out and get
-                // killed before it finishes/flushes the operation to disk).
-                process.OutputDataReceived += (s, e) => { };
-                process.ErrorDataReceived  += (s, e) => { };
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited */ }
-
-                if (!process.WaitForExit(10000))
-                {
-                    try
-                    {
-                        using (var killer = new Process())
-                        {
-                            killer.StartInfo = new ProcessStartInfo
-                            {
-                                FileName        = "taskkill",
-                                Arguments       = $"/PID {process.Id} /T /F",
-                                UseShellExecute = false,
-                                CreateNoWindow  = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError  = true
-                            };
-                            killer.Start();
-                            killer.WaitForExit(5000);
-                        }
-                    }
-                    catch { /* best effort */ }
-                    try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                }
-            }
-
-            System.Threading.Thread.Sleep(300);
-
-            foreach (var lockFile in Directory.GetFiles(workDir, "*.LCK"))
-            {
-                try { File.Delete(lockFile); } catch { /* best effort */ }
-            }
-        }
+        private static void RunDiagSqlRunner(string workDir, string sql) => SqlRunner.Execute(sql, workDir);
 
         // --------------------------------------------------------------------
         // Diagnostic mode: grow the .PX primary index past a single level
@@ -1663,209 +1841,6 @@ namespace ParadoxTest
             }
         }
 
-        private static void RunSqlRunner(string sql)
-        {
-            Console.WriteLine("SQLRunner> {0}", sql);
-
-            // Guarantee a clean starting state before every single invocation:
-            // kill any lingering SQLRunner process (a prior call may have
-            // hung and been force-killed, or a stray instance may still be
-            // shutting down) and remove all *.LCK files, then verify both
-            // are actually gone before we start a new process. Without this,
-            // multiple SQLRunner instances can pile up concurrently and
-            // fight over the same locks, which is its own source of hangs.
-            EnsureNoSqlRunnerProcessesRunning();
-            DeleteStaleLockFilesWithRetry();
-
-            var remainingLocks = Directory.GetFiles(TestFolder, "*.LCK");
-            if (remainingLocks.Length > 0)
-            {
-                Console.WriteLine("  [warn] {0} lock file(s) still present before launch: {1}",
-                    remainingLocks.Length, string.Join(", ", remainingLocks.Select(Path.GetFileName).ToArray()));
-            }
-
-            var psi = new ProcessStartInfo
-            {
-                FileName               = SqlRunnerExePath,
-                Arguments              = $"/S \"{sql}\"",
-                UseShellExecute        = false,
-                RedirectStandardInput  = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            var stdoutBuilder = new System.Text.StringBuilder();
-            var stderrBuilder = new System.Text.StringBuilder();
-
-            using (var process = new Process { StartInfo = psi, EnableRaisingEvents = true })
-            {
-                process.OutputDataReceived += (s, e) => { if (e.Data != null) stdoutBuilder.AppendLine(e.Data); };
-                process.ErrorDataReceived  += (s, e) => { if (e.Data != null) stderrBuilder.AppendLine(e.Data); };
-
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                // SQLRunner's /S flag appears to suppress the confirmation
-                // prompt only for INSERT; UPDATE/DELETE still print
-                // "Please ensure you have a Backup." and then wait on stdin
-                // for an ENTER keypress before proceeding, which our
-                // redirected (non-interactive) stdin never provides. Feed a
-                // single newline proactively so it doesn't block waiting for
-                // input that will never come.
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited or not be waiting on stdin */ }
-
-                // Per user instruction: treat SQLRunner as locked-up if it
-                // hasn't exited within ~10 seconds, rather than waiting 30s.
-                // This is our hang detector - a real "problem state", not a
-                // slow-but-working call.
-                if (!process.WaitForExit(10000))
-                {
-                    Console.WriteLine("  [warn] SQLRunner did not exit within 10s; treating as HUNG. Killing process.");
-                    KillProcessTree(process);
-                    process.WaitForExit();
-                }
-
-                string stdout = stdoutBuilder.ToString();
-                string stderr = stderrBuilder.ToString();
-
-                if (!Net35Compat.IsNullOrWhiteSpace(stdout))
-                    Console.WriteLine(stdout.Trim());
-                if (!Net35Compat.IsNullOrWhiteSpace(stderr))
-                    Console.WriteLine("  [stderr] " + stderr.Trim());
-            }
-
-            // BDE can hold onto its file handles / PDOXUSRS.LCK briefly after
-            // the SQLRunner process itself has exited (e.g. while its BDE
-            // session/engine shuts down). Give it a moment before we attempt
-            // to touch the table or its lock files again, otherwise a
-            // following ParadoxTableFile open (or another SQLRunner call)
-            // can race BDE's own cleanup and see a "table is busy" state.
-            System.Threading.Thread.Sleep(500);
-
-            // Clean up any lock file SQLRunner itself left behind, so the next
-            // invocation (or a subsequent ParadoxTableFile open) doesn't see a
-            // stale lock. Retry with backoff since BDE may still be releasing
-            // the handle for a short time after the process exits.
-            DeleteStaleLockFilesWithRetry();
-        }
-
-        /// <summary>
-        /// Deletes any *.LCK files in the test folder, retrying briefly if a
-        /// file is still in use (BDE can hold the handle open for a short
-        /// time after SQLRunner's process has exited).
-        /// </summary>
-        private static void DeleteStaleLockFilesWithRetry(int maxAttempts = 5, int delayMs = 250)
-        {
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                var remaining = Directory.GetFiles(TestFolder, "*.LCK");
-                if (remaining.Length == 0) return;
-
-                bool anyFailed = false;
-                foreach (var lockFile in remaining)
-                {
-                    try { File.Delete(lockFile); }
-                    catch (Exception ex)
-                    {
-                        anyFailed = true;
-                        if (attempt == maxAttempts)
-                            Console.WriteLine("  [warn] Could not delete {0} after {1} attempts: {2}", lockFile, maxAttempts, ex.Message);
-                    }
-                }
-
-                if (!anyFailed) return;
-                System.Threading.Thread.Sleep(delayMs);
-            }
-        }
-
-
-        /// <summary>
-        /// Deletes any *.LCK files in the test folder. Safe to call before/after
-        /// SQLRunner runs, provided no SQLRunner (or ParadoxTableFile) process
-        /// is currently using the table concurrently.
-        /// </summary>
-        private static void DeleteStaleLockFiles()
-        {
-            foreach (var lockFile in Directory.GetFiles(TestFolder, "*.LCK"))
-            {
-                try { File.Delete(lockFile); }
-                catch (Exception ex) { Console.WriteLine("  [warn] Could not delete {0}: {1}", lockFile, ex.Message); }
-            }
-        }
-
-        /// <summary>
-        /// Guarantees no SQLRunner process is left running before we launch a
-        /// new one. A previous invocation that hung and was force-killed can,
-        /// in rare cases, leave a still-shutting-down instance behind (or a
-        /// completely separate stray instance from an earlier crashed run of
-        /// this harness). Running multiple SQLRunner/BDE instances
-        /// concurrently against the same table is itself a reliable way to
-        /// cause locking problems, so this must be checked/cleared before
-        /// every single RunSqlRunner call, not just once at startup.
-        /// </summary>
-        private static void EnsureNoSqlRunnerProcessesRunning()
-        {
-            var exeName = Path.GetFileNameWithoutExtension(SqlRunnerExePath);
-            var stray = Process.GetProcessesByName(exeName);
-            if (stray.Length == 0) return;
-
-            Console.WriteLine("  [warn] {0} stray SQLRunner process(es) found before launch (PIDs: {1}); killing.",
-                stray.Length, string.Join(", ", stray.Select(p => p.Id.ToString()).ToArray()));
-
-            foreach (var p in stray)
-            {
-                try { KillProcessTree(p); }
-                catch (Exception ex) { Console.WriteLine("  [warn] Failed to kill PID {0}: {1}", p.Id, ex.Message); }
-                finally { p.Dispose(); }
-            }
-
-            // Give the OS a moment to fully tear down the killed process(es)
-            // before we go on to check/delete lock files.
-            System.Threading.Thread.Sleep(500);
-
-            var stillRunning = Process.GetProcessesByName(exeName);
-            if (stillRunning.Length > 0)
-            {
-                Console.WriteLine("  [warn] {0} SQLRunner process(es) still running after kill attempt (PIDs: {1}).",
-                    stillRunning.Length, string.Join(", ", stillRunning.Select(p => p.Id.ToString()).ToArray()));
-                foreach (var p in stillRunning) p.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Kills a process and any child processes it may have spawned
-        /// (taskkill /T), rather than relying on Process.Kill() alone, which
-        /// only kills the immediate process and can leave children running.
-        /// </summary>
-        private static void KillProcessTree(Process process)
-        {
-            try
-            {
-                using (var killer = new Process())
-                {
-                    killer.StartInfo = new ProcessStartInfo
-                    {
-                        FileName        = "taskkill",
-                        Arguments       = $"/PID {process.Id} /T /F",
-                        UseShellExecute = false,
-                        CreateNoWindow  = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError  = true
-                    };
-                    killer.Start();
-                    killer.WaitForExit(5000);
-                }
-            }
-            catch { /* fall back to direct kill below */ }
-
-            try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-        }
+        private static void RunSqlRunner(string sql) => SqlRunner.Execute(sql, TestFolder);
     }
 }

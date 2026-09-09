@@ -20,9 +20,11 @@ namespace ParadoxTest
     ///
     /// The data directory to scan is resolved, in order: the "corpusRoot"
     /// argument; the "CorpusDataRootPath" appSetting (see
-    /// SqlRunner.local.config.example); the bundled bin\Debug\data fixture
-    /// folder (always present, so this mode works out of the box even with
-    /// no machine-specific configuration).
+    /// SqlRunner.local.config.example); the bundled .\data fixture folder
+    /// relative to the current working directory (bin\Debug\data when run
+    /// from Visual Studio/Test Explorer or the built exe's own folder;
+    /// always present, so this mode works out of the box even with no
+    /// machine-specific configuration).
     ///
     /// Some tables (e.g. real-world corpus data) may be password-protected;
     /// ParadoxReader does not currently implement Paradox's encryption, so
@@ -32,10 +34,6 @@ namespace ParadoxTest
     internal static class CorpusTest
     {
         private const string WorkRoot = @"c:\temp\corpustest";
-
-        // Machine-specific; sourced from app.config's appSettings (via
-        // SqlRunner.local.config, git-ignored) rather than hard-coded.
-        private static string SqlRunnerExePath => Configuration.GetSqlRunnerExePath();
 
         private enum TableOutcome { Pass, Fail, Error, Skip }
 
@@ -58,20 +56,22 @@ namespace ParadoxTest
         /// <param name="filter">Optional substring filter on table base name (case-insensitive).</param>
         public static void Run(string corpusRoot, int maxTables, string filter)
         {
-            if (Net35Compat.IsNullOrWhiteSpace(corpusRoot))
+            if (string.IsNullOrWhiteSpace(corpusRoot))
                 corpusRoot = Configuration.GetCorpusDataRootPath();
 
             // Final fallback: the bundled fixture data folder copied to the
-            // output directory (bin\Debug\data) alongside the exe, so this
-            // mode always has *something* to run against out of the box,
-            // without requiring any machine-specific configuration.
-            if (Net35Compat.IsNullOrWhiteSpace(corpusRoot))
+            // output directory (bin\Debug\data), resolved relative to the
+            // current working directory rather than the entry assembly
+            // (which, when running under a test host such as Visual Studio's
+            // Test Explorer, is the test host's own path rather than
+            // ParadoxTest's bin\Debug folder). This keeps ".\data" working
+            // for both `ParadoxTest.exe` and unit-test-driven runs.
+            if (string.IsNullOrWhiteSpace(corpusRoot))
             {
-                corpusRoot = Path.Combine(
-                    Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location), "data");
+                corpusRoot = Path.Combine(Directory.GetCurrentDirectory(), "data");
             }
 
-            if (Net35Compat.IsNullOrWhiteSpace(corpusRoot) || !Directory.Exists(corpusRoot))
+            if (string.IsNullOrWhiteSpace(corpusRoot) || !Directory.Exists(corpusRoot))
             {
                 Console.WriteLine("[corpustest] Corpus root not found: {0}", corpusRoot);
                 Console.WriteLine("[corpustest] Pass a corpusRoot argument, or set the \"CorpusDataRootPath\" " +
@@ -79,10 +79,10 @@ namespace ParadoxTest
                 return;
             }
 
-            bool haveSqlRunner = File.Exists(SqlRunnerExePath);
+            bool haveSqlRunner = SqlRunner.IsAvailable;
             if (!haveSqlRunner)
             {
-                Console.WriteLine("[corpustest] [warn] SQLRunner not found at {0}; SQLRunner-side comparison will be skipped for every table.", SqlRunnerExePath);
+                Console.WriteLine("[corpustest] [warn] SQLRunner not found at {0}; SQLRunner-side comparison will be skipped for every table.", SqlRunner.ExePath);
             }
 
             Directory.CreateDirectory(WorkRoot);
@@ -93,7 +93,7 @@ namespace ParadoxTest
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (!Net35Compat.IsNullOrWhiteSpace(filter))
+            if (!string.IsNullOrWhiteSpace(filter))
             {
                 tableBaseNames = tableBaseNames
                     .Where(n => n.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -739,66 +739,10 @@ namespace ParadoxTest
 
         /// <summary>
         /// Minimal, self-contained SQLRunner invocation for the corpus test
-        /// mode (deliberately separate from Program.RunSqlRunner, which is
+        /// mode (deliberately separate from MiscTests' RunSqlRunner, which is
         /// scoped to the single-table TESTTAB harness/TestFolder constant).
-        /// Applies the same hang-detection/timeout tolerance since SQLRunner
-        /// can wait on stdin for UPDATE/DELETE confirmation prompts.
+        /// Delegates to the consolidated <see cref="SqlRunner"/> helper.
         /// </summary>
-        private static void RunSqlRunner(string workDir, string sql)
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName               = SqlRunnerExePath,
-                Arguments              = $"/S \"{sql}\"",
-                UseShellExecute        = false,
-                RedirectStandardInput  = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            using (var process = new Process { StartInfo = psi })
-            {
-                process.Start();
-
-                try
-                {
-                    process.StandardInput.WriteLine();
-                    process.StandardInput.Flush();
-                }
-                catch { /* process may have already exited */ }
-
-                if (!process.WaitForExit(10000))
-                {
-                    try
-                    {
-                        using (var killer = new Process())
-                        {
-                            killer.StartInfo = new ProcessStartInfo
-                            {
-                                FileName        = "taskkill",
-                                Arguments       = $"/PID {process.Id} /T /F",
-                                UseShellExecute = false,
-                                CreateNoWindow  = true,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError  = true
-                            };
-                            killer.Start();
-                            killer.WaitForExit(5000);
-                        }
-                    }
-                    catch { /* best effort */ }
-                    try { if (!process.HasExited) process.Kill(); } catch { /* best effort */ }
-                    process.WaitForExit();
-                }
-            }
-
-            System.Threading.Thread.Sleep(300);
-
-            foreach (var lockFile in Directory.GetFiles(workDir, "*.LCK"))
-            {
-                try { File.Delete(lockFile); } catch { /* best effort */ }
-            }
-        }
+        private static void RunSqlRunner(string workDir, string sql) => SqlRunner.Execute(sql, workDir);
     }
 }

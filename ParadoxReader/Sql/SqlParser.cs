@@ -6,25 +6,30 @@ namespace ParadoxReader.Sql
 {
     /// <summary>
     /// Recursive-descent parser for a constrained BDE Local SQL-like subset:
-    /// single-table SELECT/INSERT/UPDATE/DELETE with a WHERE clause built
-    /// from =,&lt;&gt;,&lt;,&lt;=,&gt;,&gt;= comparisons combined with AND/OR
-    /// and parentheses. No joins, subqueries, aggregates, GROUP BY, or
+    /// SELECT (with optional INNER/LEFT [OUTER] JOINs using equality ON
+    /// conditions) plus single-table INSERT/UPDATE/DELETE, all with a WHERE
+    /// clause built from =,&lt;&gt;,&lt;,&lt;=,&gt;,&gt;= comparisons combined
+    /// with AND/OR and parentheses. No subqueries, aggregates, GROUP BY, or
     /// ORDER BY are supported (see ParadoxSqlExecutor remarks).
     ///
     /// Grammar (informal EBNF):
     ///   statement    := selectStmt | insertStmt | updateStmt | deleteStmt
-    ///   selectStmt   := 'SELECT' ('*' | columnList) 'FROM' tableRef ('WHERE' whereExpr)?
+    ///   selectStmt   := 'SELECT' ('*' | qualColumnList) 'FROM' tableRef joinClause* ('WHERE' whereExpr)?
+    ///   joinClause   := ('INNER' | 'LEFT' 'OUTER'?)? 'JOIN' tableRef 'ON' joinEquality ('AND' joinEquality)*
+    ///   joinEquality := qualColumnRef '=' qualColumnRef
     ///   insertStmt   := 'INSERT' 'INTO' tableRef ('(' columnList ')')? 'VALUES' '(' valueList ')'
     ///   updateStmt   := 'UPDATE' tableRef ('AS'? alias)? 'SET' assignment (',' assignment)* ('WHERE' whereExpr)?
     ///   deleteStmt   := 'DELETE' 'FROM' tableRef ('WHERE' whereExpr)?
     ///   tableRef     := (quotedLiteral | identifier) ('AS'? identifier)?
     ///   columnList   := columnRef (',' columnRef)*
     ///   columnRef    := (identifier '.')? (identifier | quotedLiteral)
+    ///   qualColumnList := qualColumnRef (',' qualColumnRef)*
+    ///   qualColumnRef := (identifier '.')? (identifier | quotedLiteral | '*')
     ///   assignment   := columnRef '=' value
     ///   whereExpr    := orExpr
     ///   orExpr       := andExpr ('OR' andExpr)*
     ///   andExpr      := comparison ('AND' comparison)*
-    ///   comparison   := '(' whereExpr ')' | columnRef operator value
+    ///   comparison   := '(' whereExpr ')' | qualColumnRef operator value
     ///   value        := quotedLiteral | number | 'TRUE' | 'FALSE' | 'NULL'
     /// </summary>
     internal sealed class SqlParser
@@ -96,11 +101,18 @@ namespace ParadoxReader.Sql
             }
             else
             {
-                stmt.Columns = ParseColumnList();
+                stmt.Columns = ParseQualifiedColumnList();
             }
 
             ExpectKeyword("FROM");
             stmt.Table = ParseTableRef();
+
+            stmt.Joins = new List<JoinClause>();
+            while (IsKeyword("JOIN") || IsKeyword("INNER") || IsKeyword("LEFT"))
+            {
+                stmt.Joins.Add(ParseJoinClause());
+            }
+            if (stmt.Joins.Count == 0) stmt.Joins = null;
 
             if (IsKeyword("WHERE"))
             {
@@ -109,6 +121,45 @@ namespace ParadoxReader.Sql
             }
 
             return stmt;
+        }
+
+        private JoinClause ParseJoinClause()
+        {
+            var join = new JoinClause { Type = JoinType.Inner };
+
+            if (IsKeyword("LEFT"))
+            {
+                pos++;
+                join.Type = JoinType.Left;
+                if (IsKeyword("OUTER")) pos++;
+            }
+            else if (IsKeyword("INNER"))
+            {
+                pos++;
+            }
+
+            ExpectKeyword("JOIN");
+            join.Table = ParseTableRef();
+            ExpectKeyword("ON");
+
+            join.Conditions = new List<JoinEquality> { ParseJoinEquality() };
+            while (IsKeyword("AND"))
+            {
+                pos++;
+                join.Conditions.Add(ParseJoinEquality());
+            }
+
+            return join;
+        }
+
+        private JoinEquality ParseJoinEquality()
+        {
+            var left = ParseQualifiedColumnRef();
+            var opTok = Expect(SqlTokenType.Operator, "'='");
+            if (opTok.Text != "=")
+                throw new SqlParseException($"Only equality (=) join conditions are supported, found '{opTok.Text}' at position {opTok.Position}");
+            var right = ParseQualifiedColumnRef();
+            return new JoinEquality { Left = left, Right = right };
         }
 
         // ----------------------------------------------------------------
@@ -246,6 +297,56 @@ namespace ParadoxReader.Sql
             return new TableRef { Path = path, Alias = alias };
         }
 
+        private List<SqlColumnRef> ParseQualifiedColumnList()
+        {
+            var list = new List<SqlColumnRef> { ParseQualifiedColumnRef() };
+            while (Current.Type == SqlTokenType.Comma)
+            {
+                pos++;
+                list.Add(ParseQualifiedColumnRef());
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Parses a column reference, preserving an optional table-alias
+        /// prefix (e.g. A.'FIELD' or A.FIELD, or a bare star/alias.star) so
+        /// multi-table (JOIN) statements can disambiguate columns across
+        /// tables at execution time.
+        /// </summary>
+        private SqlColumnRef ParseQualifiedColumnRef()
+        {
+            string first;
+            if (Current.Type == SqlTokenType.Identifier || Current.Type == SqlTokenType.QuotedIdentifier)
+            {
+                first = Current.Text;
+                pos++;
+            }
+            else
+            {
+                throw new SqlParseException($"Expected column name at position {Current.Position}, found '{Current.Text}'");
+            }
+
+            if (Current.Type == SqlTokenType.Dot)
+            {
+                pos++;
+                if (Current.Type == SqlTokenType.Identifier || Current.Type == SqlTokenType.QuotedIdentifier)
+                {
+                    var second = Current.Text;
+                    pos++;
+                    return new SqlColumnRef { TableAlias = first, ColumnName = second };
+                }
+                if (Current.Type == SqlTokenType.Star)
+                {
+                    pos++;
+                    return new SqlColumnRef { TableAlias = first, ColumnName = "*" };
+                }
+                throw new SqlParseException($"Expected column name after '.' at position {Current.Position}");
+            }
+
+            return new SqlColumnRef { ColumnName = first };
+        }
+
         private List<string> ParseColumnList()
         {
             var list = new List<string> { ParseColumnRef() };
@@ -283,6 +384,13 @@ namespace ParadoxReader.Sql
                     var second = Current.Text;
                     pos++;
                     return second; // discard the alias prefix
+                }
+                if (Current.Type == SqlTokenType.Star)
+                {
+                    // alias.* -- since only single-table statements are supported,
+                    // this is equivalent to a bare '*'.
+                    pos++;
+                    return "*";
                 }
                 throw new SqlParseException($"Expected column name after '.' at position {Current.Position}");
             }
@@ -326,12 +434,12 @@ namespace ParadoxReader.Sql
                 return inner;
             }
 
-            string col = ParseColumnRef();
+            var left = ParseQualifiedColumnRef();
             var opTok = Expect(SqlTokenType.Operator, "comparison operator");
             var op = MapOperator(opTok.Text);
             var value = ParseValue();
 
-            return new WhereComparison { ColumnName = col, Operator = op, Value = value };
+            return new WhereComparison { TableAlias = left.TableAlias, ColumnName = left.ColumnName, Operator = op, Value = value };
         }
 
         private ParadoxCompareOperator MapOperator(string opText)

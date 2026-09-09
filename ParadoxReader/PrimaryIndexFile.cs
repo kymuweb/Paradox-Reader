@@ -88,6 +88,19 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         public PrimaryIndexFile(string pxFilePath, ParadoxFile.FieldInfo[] primaryKeyFields)
+            : this(new FileStream(pxFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite), pxFilePath, primaryKeyFields)
+        {
+        }
+
+        /// <summary>
+        /// Opens a primary index whose .PX data is backed by an
+        /// already-open <paramref name="pxStream"/> (e.g. a
+        /// <see cref="MemoryStream"/>) rather than a file on disk.
+        /// <paramref name="pxFilePath"/> is retained only for
+        /// <see cref="FilePath"/> reporting/diagnostics. Used by
+        /// <see cref="TableRebuilder"/>'s optional in-memory rebuild path.
+        /// </summary>
+        internal PrimaryIndexFile(Stream pxStream, string pxFilePath, ParadoxFile.FieldInfo[] primaryKeyFields)
         {
             FilePath = pxFilePath;
             this.primaryKeyFields = primaryKeyFields;
@@ -96,7 +109,7 @@ namespace ParadoxReader
                 keyDataSize += f.fSize;
 
             entrySize     = keyDataSize + POINTER_SIZE;
-            pxFile        = new ParadoxFile(pxFilePath);
+            pxFile        = new ParadoxFile(pxStream);
             blockCapacity = pxFile.maxTableSize * 0x400 - HEADER_SIZE;
 
             System.Diagnostics.Debug.WriteLine(
@@ -204,16 +217,19 @@ namespace ParadoxReader
         }
 
         /// <summary>
-        /// Mirrors the parent .DB file's V4Hdr changeCount4 (offset 0x70) into
-        /// this .PX file. BDE/Pdxrbld compares this "table version" counter
-        /// against the index's own copy to decide whether the index is out
-        /// of date.
+        /// Previously mirrored the parent .DB file's V4Hdr changeCount4
+        /// (offset 0x70) into this .PX file. Disproven by direct experiment:
+        /// a 4-case SQLRunner matrix showed the .PX changeCount4 is always 0
+        /// in both SQLRunner-created originals and BDE's own Pdxrbld
+        /// rebuilds, regardless of the .DB's own changeCount4/record count.
+        /// Mirroring it here corrupted every rebuilt .PX (changeCount4 ended
+        /// up matching the migrated record count instead of staying 0),
+        /// which is the actual cause of Paradox 7's "Index is out of date"
+        /// on rebuilt tables. So this is a no-op again.
         /// </summary>
         public void SyncTableVersion(short changeCount4)
         {
-            pxFile.stream.Position = ParadoxHeaderOffsets.ChangeCount4;
-            using (var w = new BinaryWriter(new NonClosingStreamWrapper(pxFile.stream), Encoding.Default))
-                w.Write(changeCount4);
+            // Intentionally no-op; see summary above.
         }
 
         /// <summary>

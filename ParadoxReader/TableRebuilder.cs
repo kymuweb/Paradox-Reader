@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace ParadoxReader
 {
@@ -21,6 +22,89 @@ namespace ParadoxReader
         /// that was recreated as part of the rebuild.
         /// </summary>
         public List<string> RebuiltFiles { get; internal set; }
+    }
+
+    /// <summary>
+    /// Major phases of a <see cref="TableRebuilder"/> rebuild operation, reported via
+    /// <see cref="TableRebuildProgress"/> in declaration/execution order.
+    /// </summary>
+    public enum RebuildStage
+    {
+        /// <summary>Reading every existing record into memory before anything is modified.</summary>
+        Snapshotting = 0,
+
+        /// <summary>Creating the empty .DB/.PX/.Xnn/.Xgn/.Ynn/.Ygn/.MB skeleton files.</summary>
+        BuildingSkeletons = 1,
+
+        /// <summary>Re-inserting every snapshotted record into the fresh skeleton.</summary>
+        InsertingRecords = 2,
+
+        /// <summary>Persisting in-memory staged file contents back to disk (only when useMemoryStreams is true).</summary>
+        FlushingToDisk = 3,
+
+        /// <summary>Restoring preserved change-count/write-counter header bytes.</summary>
+        RestoringMetadata = 4,
+
+        /// <summary>Atomically swapping the rebuilt files back over the originals.</summary>
+        SwappingFiles = 5
+    }
+
+    /// <summary>
+    /// Progress snapshot reported by <see cref="TableRebuilder"/> during a rebuild via
+    /// <see cref="IProgress{T}"/>. Exposes both an overall, monotonically-increasing
+    /// <see cref="OverallPercent"/> (suitable for a single "total progress" bar that only
+    /// ever completes once from 0 to 100 across the whole operation) and a
+    /// <see cref="StagePercent"/> that resets back to 0 at the start of every new
+    /// <see cref="Stage"/> (suitable for a secondary "current step" bar).
+    /// </summary>
+    public sealed class TableRebuildProgress
+    {
+        /// <summary>The major phase currently executing.</summary>
+        public RebuildStage Stage { get; }
+
+        /// <summary>1-based ordinal of <see cref="Stage"/> among <see cref="TotalStages"/>.</summary>
+        public int StageNumber { get; }
+
+        /// <summary>Total number of major stages in this rebuild.</summary>
+        public int TotalStages { get; }
+
+        /// <summary>Progress (0-100) within the current <see cref="Stage"/> only; resets to 0 at the start of each stage.</summary>
+        public double StagePercent { get; }
+
+        /// <summary>Optional human-readable status message (e.g. "Reinserting record 1,234 of 5,000").</summary>
+        public string Message { get; }
+
+        /// <summary>
+        /// Overall progress (0-100) across the entire rebuild, computed from the current
+        /// stage's ordinal position plus its own fractional completion. Increases
+        /// monotonically and completes exactly once per rebuild.
+        /// </summary>
+        public double OverallPercent =>
+            TotalStages <= 0 ? 0 : ((StageNumber - 1) + (StagePercent / 100.0)) / TotalStages * 100.0;
+
+        internal TableRebuildProgress(RebuildStage stage, int stageNumber, int totalStages, double stagePercent, string message)
+        {
+            Stage = stage;
+            StageNumber = stageNumber;
+            TotalStages = totalStages;
+            StagePercent = stagePercent;
+            Message = message;
+        }
+
+        /// <summary>Short, human-readable display name for <paramref name="stage"/> (e.g. for a UI label above a progress bar).</summary>
+        public static string GetStageDisplayName(RebuildStage stage)
+        {
+            switch (stage)
+            {
+                case RebuildStage.Snapshotting: return "Reading existing records";
+                case RebuildStage.BuildingSkeletons: return "Building empty table skeleton";
+                case RebuildStage.InsertingRecords: return "Reinserting records";
+                case RebuildStage.FlushingToDisk: return "Flushing to disk";
+                case RebuildStage.RestoringMetadata: return "Restoring table metadata";
+                case RebuildStage.SwappingFiles: return "Swapping in rebuilt files";
+                default: return stage.ToString();
+            }
+        }
     }
 
     /// <summary>
@@ -82,11 +166,14 @@ namespace ParadoxReader
         /// "RESTTEMP" name). If null, a unique name is generated so concurrent
         /// rebuilds never collide.
         /// </param>
-        public static TableRebuildResult Rebuild(string dbFilePath, string tempTableName = null)
+        /// <param name="progress">Optional progress reporter invoked as the rebuild advances through its stages.</param>
+        /// <param name="cancellationToken">Optional token; checked between records/files so the rebuild can be cancelled cooperatively.</param>
+        public static TableRebuildResult Rebuild(string dbFilePath, string tempTableName = null, bool useMemoryStreams = false,
+            IProgress<TableRebuildProgress> progress = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             using (var table = new ParadoxTableFile(dbFilePath))
             {
-                return Rebuild(table, tempTableName);
+                return Rebuild(table, tempTableName, useMemoryStreams, progress, cancellationToken);
             }
         }
 
@@ -105,13 +192,83 @@ namespace ParadoxReader
         /// "RESTTEMP" name). If null, a unique name is generated so concurrent
         /// rebuilds never collide.
         /// </param>
-        public static TableRebuildResult Rebuild(ParadoxTableFile table, string tempTableName = null)
+        /// <param name="useMemoryStreams">
+        /// When true, the rebuilt .DB file's contents are staged entirely in
+        /// an in-memory <see cref="MemoryStream"/> while every record is
+        /// reinserted, and only written back to disk once at the end,
+        /// instead of flushing to disk after every insert. This can
+        /// significantly speed up rebuilds of large tables at the cost of
+        /// holding the whole rebuilt .DB file in memory. Index/blob files
+        /// are unaffected and continue to be written directly to disk.
+        /// </param>
+        /// <param name="progress">Optional progress reporter invoked as the rebuild advances through its stages.</param>
+        /// <param name="cancellationToken">Optional token; checked between records/files so the rebuild can be cancelled cooperatively.</param>
+        public static TableRebuildResult Rebuild(ParadoxTableFile table, string tempTableName = null, bool useMemoryStreams = false,
+            IProgress<TableRebuildProgress> progress = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (table == null) throw new ArgumentNullException(nameof(table));
 
+            return RebuildCore(table, tempTableName, newSchema: null, useMemoryStreams, progress, cancellationToken);
+        }
+
+        /// <summary>
+        /// Regenerates <paramref name="table"/> under a new
+        /// <paramref name="newSchema"/> (Table > Modify Structure): builds a
+        /// fresh empty .DB/.PX/.Xnn skeleton set from
+        /// <paramref name="newSchema"/> via <see cref="ParadoxHeaderBuilder"/>
+        /// (rather than cloning the existing files' headers), remaps every
+        /// existing record's field values onto the new field layout by
+        /// matching field names (case-insensitively; fields absent from the
+        /// new schema are dropped, new fields default to null, and
+        /// differently-typed fields are converted on a best-effort basis,
+        /// falling back to null on failure), then re-inserts every record
+        /// into the fresh skeleton exactly like <see cref="Rebuild"/> does.
+        /// Takes ownership of <paramref name="table"/> and disposes it.
+        /// </summary>
+        /// <param name="progress">Optional progress reporter invoked as the rebuild advances through its stages.</param>
+        /// <param name="cancellationToken">Optional token; checked between records/files so the rebuild can be cancelled cooperatively.</param>
+        public static TableRebuildResult RebuildWithSchema(ParadoxTableFile table, TableSchemaDefinition newSchema, string tempTableName = null, bool useMemoryStreams = false,
+            IProgress<TableRebuildProgress> progress = null, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (table == null) throw new ArgumentNullException(nameof(table));
+            if (newSchema == null) throw new ArgumentNullException(nameof(newSchema));
+            if (newSchema.Fields == null || newSchema.Fields.Count == 0)
+                throw new ArgumentException("A table must have at least one field.", nameof(newSchema));
+
+            return RebuildCore(table, tempTableName, newSchema, useMemoryStreams, progress, cancellationToken);
+        }
+
+        private static TableRebuildResult RebuildCore(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams,
+            IProgress<TableRebuildProgress> progress, CancellationToken cancellationToken)
+        {
+            bool tableDisposed = false;
+            try
+            {
+                return RebuildCoreImpl(table, tempTableName, newSchema, useMemoryStreams, progress, cancellationToken, () => tableDisposed = true);
+            }
+            catch (OperationCanceledException)
+            {
+                // RebuildCore takes ownership of `table` regardless of outcome; if cancellation
+                // happened before the normal swap step disposed it (which releases its file
+                // handles/lock), dispose it here so the original table remains usable afterward.
+                if (!tableDisposed)
+                    table.Dispose();
+                throw;
+            }
+        }
+
+        private static TableRebuildResult RebuildCoreImpl(ParadoxTableFile table, string tempTableName, TableSchemaDefinition newSchema, bool useMemoryStreams,
+            IProgress<TableRebuildProgress> progress, CancellationToken cancellationToken, Action onTableDisposed)
+        {
+            // Stage numbering/order must match RebuildStage's declaration order.
+            const int totalStages = 6;
+            void Report(RebuildStage stage, double stagePercent, string message = null) =>
+                progress?.Report(new TableRebuildProgress(stage, (int)stage + 1, totalStages, stagePercent, message));
+
+            var overallStopwatch = System.Diagnostics.Stopwatch.StartNew();
             string dbFilePath = table.FilePath;
-            string dir        = Path.GetDirectoryName(dbFilePath) ?? ".";
-            string baseName   = Path.GetFileNameWithoutExtension(dbFilePath);
+            string dir = Path.GetDirectoryName(dbFilePath) ?? ".";
+            string baseName = Path.GetFileNameWithoutExtension(dbFilePath);
 
             // ------------------------------------------------------------
             // 1. Snapshot every record, in on-disk order, before anything
@@ -119,11 +276,24 @@ namespace ParadoxReader
             //    order, so insertion order into the rebuilt table exactly
             //    matches the original physical layout.
             // ------------------------------------------------------------
+            Report(RebuildStage.Snapshotting, 0, "Reading existing records");
+            var snapshotStopwatch = System.Diagnostics.Stopwatch.StartNew();
             var records = new List<object[]>();
+            int approxRecordCount = Math.Max(1, table.RecordCount);
             foreach (var rec in table.Enumerate())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 records.Add(rec.DataValues);
+                if ((records.Count & 0xFF) == 0)
+                    Report(RebuildStage.Snapshotting, Math.Min(100.0, records.Count * 100.0 / approxRecordCount), $"Reading record {records.Count:N0}");
+            }
+            Report(RebuildStage.Snapshotting, 100, $"Read {records.Count:N0} record(s)");
+            snapshotStopwatch.Stop();
+            System.Diagnostics.Debug.WriteLine(
+                $"TableRebuilder.RebuildCore [{baseName}]: snapshotted {records.Count} records in {snapshotStopwatch.ElapsedMilliseconds}ms.");
 
-            var fieldTypes = table.FieldTypes;
+            var oldFieldTypes = table.FieldTypes;
+            var oldFieldNames = table.FieldNames;
 
             // ------------------------------------------------------------
             // 2. Locate every file belonging to this table (.DB, .PX,
@@ -141,25 +311,129 @@ namespace ParadoxReader
 
             // ------------------------------------------------------------
             // 3. Build an empty skeleton copy of every associated file
-            //    under the temp base name: same schema/header, but with
-            //    RecordCount/block-chain/index-tree/change-counter fields
-            //    reset to "empty".
+            //    under the temp base name. When newSchema is null (plain
+            //    compact-and-repair rebuild), skeletons clone the existing
+            //    files' headers with only the "empty data" fields reset.
+            //    When newSchema is supplied (Modify Structure), skeletons
+            //    are instead synthesized from scratch from newSchema via
+            //    ParadoxHeaderBuilder, since the field layout itself is
+            //    changing.
             // ------------------------------------------------------------
+            Report(RebuildStage.BuildingSkeletons, 0, "Building empty table skeleton");
             var swapPairs = new List<FilePair>();
-            foreach (var src in sourceFiles)
+            string oldMbPath = sourceFiles.FirstOrDefault(f => Path.GetExtension(f).Equals(".MB", StringComparison.OrdinalIgnoreCase));
+
+            // Snapshot changeCount1/changeCount2 (.DB, offset 0x2D/0x2E) and the
+            // write counter (.PX/secondary index, offset 0x2C) from every
+            // existing file *before* building empty skeletons, so they can be
+            // restored verbatim after record reinsertion. See the remarks in
+            // CreateEmptyTableSkeleton for why: a clean, single-pass BDE
+            // Pdxrbld rebuild leaves these exact bytes unchanged from the
+            // pre-rebuild source, rather than resetting/recomputing them, and
+            // Paradox 7/SQLRunner reject a rebuilt table whose bytes don't
+            // match this expectation ("Index is out of date"). Only applies to
+            // the plain compact-and-repair path (newSchema == null); Modify
+            // Structure synthesizes brand-new files from scratch instead.
+            var preservedChangeCounts = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            if (newSchema == null)
             {
-                string ext  = Path.GetExtension(src);
-                string dest = Path.Combine(dir, tempBaseName + ext);
+                foreach (var src in sourceFiles)
+                {
+                    string ext = Path.GetExtension(src);
+                    if (ext.Equals(".MB", StringComparison.OrdinalIgnoreCase))
+                        continue;
 
-                if (ext.Equals(".MB", StringComparison.OrdinalIgnoreCase))
-                    CreateEmptyBlobSkeleton(src, dest);
-                else
-                    CreateEmptyTableSkeleton(src, dest);
+                    byte[] header = ReadHeaderBytes(src);
+                    if (ext.Equals(".DB", StringComparison.OrdinalIgnoreCase))
+                        preservedChangeCounts[ext] = new[] { header[ParadoxHeaderOffsets.ChangeCount1], header[ParadoxHeaderOffsets.ChangeCount2] };
+                    else
+                        preservedChangeCounts[ext] = new[] { header[ParadoxHeaderOffsets.WriteCounter] };
+                }
+            }
 
-                swapPairs.Add(new FilePair(src, dest));
+            if (newSchema == null)
+            {
+                foreach (var src in sourceFiles)
+                {
+                    string ext = Path.GetExtension(src);
+                    string dest = Path.Combine(dir, tempBaseName + ext);
+
+                    if (ext.Equals(".MB", StringComparison.OrdinalIgnoreCase))
+                        CreateEmptyBlobSkeleton(src, dest);
+                    else
+                        CreateEmptyTableSkeleton(src, dest);
+
+                    swapPairs.Add(new FilePair(src, dest));
+                }
+            }
+            else
+            {
+                string tempDbDest = Path.Combine(dir, tempBaseName + ".DB");
+                File.WriteAllBytes(tempDbDest, ParadoxHeaderBuilder.BuildDbHeader(newSchema));
+                swapPairs.Add(new FilePair(dbFilePath, tempDbDest));
+
+                string oldPxPath = sourceFiles.FirstOrDefault(f => Path.GetExtension(f).Equals(".PX", StringComparison.OrdinalIgnoreCase));
+                if (newSchema.PrimaryKeyFieldCount > 0)
+                {
+                    string tempPxDest = Path.Combine(dir, tempBaseName + ".PX");
+                    File.WriteAllBytes(tempPxDest, ParadoxHeaderBuilder.BuildPxHeader(newSchema));
+                    swapPairs.Add(new FilePair(oldPxPath ?? Path.ChangeExtension(dbFilePath, ".PX"), tempPxDest));
+                }
+                else if (oldPxPath != null)
+                {
+                    // Primary key removed entirely: the old .PX no longer applies.
+                    File.Delete(oldPxPath);
+                }
+
+                // Existing secondary index files (.Xnn/.Xgn/.Ynn/.Ygn) don't map
+                // cleanly onto a changed field layout, so they're simply removed;
+                // the caller is expected to have captured/re-specified the desired
+                // indexes in newSchema.Indexes, built fresh below.
+                foreach (var src in sourceFiles)
+                {
+                    string ext = Path.GetExtension(src).ToUpperInvariant();
+                    if (ext.Length >= 2 && (ext[1] == 'X' || ext[1] == 'Y') && !ext.Equals(".PX", StringComparison.OrdinalIgnoreCase))
+                        File.Delete(src);
+                }
+
+                // Every index this library creates corresponds to a named
+                // index (equivalent to SQLRunner's CREATE INDEX), which real
+                // BDE always names .XGn/.YGn with a sequential ordinal - see
+                // ParadoxHeaderBuilder.BuildSecondaryIndexHeader remarks.
+                int indexOrdinal = 0;
+                foreach (var index in newSchema.Indexes)
+                {
+                    string ordinal = (indexOrdinal++).ToString();
+                    string xExt = ".XG" + ordinal;
+                    string yExt = ".YG" + ordinal;
+
+                    string tempIndexDest = Path.Combine(dir, tempBaseName + xExt);
+                    File.WriteAllBytes(tempIndexDest, ParadoxHeaderBuilder.BuildSecondaryIndexHeader(newSchema, index));
+                    swapPairs.Add(new FilePair(Path.ChangeExtension(dbFilePath, xExt), tempIndexDest));
+
+                    string tempYDest = Path.Combine(dir, tempBaseName + yExt);
+                    File.WriteAllBytes(tempYDest, ParadoxHeaderBuilder.BuildMaintainedFieldHeader(newSchema, index));
+                    swapPairs.Add(new FilePair(Path.ChangeExtension(dbFilePath, yExt), tempYDest));
+                }
+
+                bool hasBlobField = newSchema.Fields.Any(f =>
+                    f.Type == ParadoxFieldTypes.MemoBLOb || f.Type == ParadoxFieldTypes.FmtMemoBLOb ||
+                    f.Type == ParadoxFieldTypes.BLOb || f.Type == ParadoxFieldTypes.OLE || f.Type == ParadoxFieldTypes.Graphic);
+                if (hasBlobField && oldMbPath != null)
+                {
+                    string tempMbDest = Path.Combine(dir, tempBaseName + ".MB");
+                    CreateEmptyBlobSkeleton(oldMbPath, tempMbDest);
+                    swapPairs.Add(new FilePair(oldMbPath, tempMbDest));
+                }
+                else if (!hasBlobField && oldMbPath != null)
+                {
+                    File.Delete(oldMbPath);
+                }
             }
 
             string tempDbPath = Path.Combine(dir, tempBaseName + ".DB");
+            Report(RebuildStage.BuildingSkeletons, 100, "Skeleton files created");
+            cancellationToken.ThrowIfCancellationRequested();
 
             // ------------------------------------------------------------
             // 4. Re-insert every record into the fresh skeleton. This
@@ -169,38 +443,319 @@ namespace ParadoxReader
             //    the normal WriteBlob path) completely from scratch.
             // ------------------------------------------------------------
             int migrated = 0;
-            using (var newTable = new ParadoxTableFile(tempDbPath))
+
+            // When useMemoryStreams is enabled, the temp .DB file's bytes are
+            // loaded into a MemoryStream up front, every record is inserted
+            // against that in-memory copy (avoiding a disk flush per insert -
+            // see BlockManager.WriteBlock/ParadoxTableFile.WriteRecordCountToHeader),
+            // and the final contents are written back to disk exactly once
+            // after every record has been migrated.
+            MemoryStream memDbStream = null;
+            Dictionary<string, MemoryStream> memStreamsByPath = null;
+            ParadoxTableFile newTable;
+            if (useMemoryStreams)
             {
-                foreach (var original in records)
+                // Load every temp skeleton file (.DB, .PX, .Xgn/.Ygn, .MB)
+                // created above into its own expandable MemoryStream, keyed
+                // by full path, so ParadoxTableFile/IndexManager/
+                // ParadoxBlobFile can operate on them entirely in memory
+                // during reinsertion instead of hitting disk per write.
+                memStreamsByPath = new Dictionary<string, MemoryStream>(StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in swapPairs)
+                    memStreamsByPath[pair.Temp] = LoadExpandableMemoryStream(pair.Temp);
+
+                memDbStream = memStreamsByPath[tempDbPath];
+                var associatedStreams = new Dictionary<string, Stream>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kvp in memStreamsByPath)
                 {
-                    var values = (object[])original.Clone();
-                    ClearStaleBlobReferences(values, fieldTypes);
-                    newTable.InsertRecord(values);
-                    migrated++;
+                    if (!kvp.Key.Equals(tempDbPath, StringComparison.OrdinalIgnoreCase))
+                        associatedStreams[kvp.Key] = kvp.Value;
+                }
+
+                newTable = new ParadoxTableFile(memDbStream, tempDbPath, associatedStreams);
+            }
+            else
+            {
+                newTable = new ParadoxTableFile(tempDbPath);
+            }
+            var recordWriteStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            bool cancelled = false;
+            try
+            {
+                var newFieldTypes = newTable.FieldTypes;
+
+                // Hold the .LCK write lock for the entire reinsertion loop
+                // instead of letting each InsertRecord acquire/release it
+                // individually. This is always correct (no other process
+                // can be using the brand-new temp table yet) and, when
+                // useMemoryStreams is enabled, avoids writing/deleting the
+                // .LCK file once per record while every other write is
+                // already happening purely in memory.
+                using (newTable.AcquireScopedBatchWriteLock())
+                {
+                    int totalRecords = Math.Max(1, records.Count);
+                    Report(RebuildStage.InsertingRecords, 0, $"Reinserting record 0 of {records.Count:N0}");
+                    foreach (var original in records)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        object[] values = newSchema == null
+                            ? (object[])original.Clone()
+                            : RemapValues(original, oldFieldNames, oldFieldTypes, newSchema);
+
+                        ClearStaleBlobReferences(values, newFieldTypes);
+                        newTable.InsertRecord(values);
+                        migrated++;
+
+                        if ((migrated & 0xFF) == 0 || migrated == records.Count)
+                            Report(RebuildStage.InsertingRecords, migrated * 100.0 / totalRecords, $"Reinserting record {migrated:N0} of {records.Count:N0}");
+                    }
+                }
+                recordWriteStopwatch.Stop();
+                System.Diagnostics.Debug.WriteLine(
+                    $"TableRebuilder.RebuildCore [{baseName}]: reinserted {migrated} records in {recordWriteStopwatch.ElapsedMilliseconds}ms " +
+                    $"({(migrated > 0 ? recordWriteStopwatch.Elapsed.TotalMilliseconds / migrated : 0):F3}ms/record, useMemoryStreams={useMemoryStreams}).");
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled = true;
+                throw;
+            }
+            finally
+            {
+                if (cancelled)
+                {
+                    // Skip flushing to disk and dispose without writing anything further;
+                    // best-effort cleanup of the temp skeleton files created above so a
+                    // cancelled rebuild doesn't leave orphaned *_rbld.* artifacts behind.
+                    // The original table's files are untouched at this point (the swap
+                    // in step 5 hasn't happened yet), so the source table remains usable.
+                    newTable.Dispose();
+                    foreach (var pair in swapPairs)
+                    {
+                        try { if (File.Exists(pair.Temp)) File.Delete(pair.Temp); } catch { /* best effort */ }
+                    }
+                }
+                else if (memStreamsByPath != null)
+                {
+                    // Persist every in-memory temp artifact back to disk
+                    // exactly once, now that every record has been migrated.
+                    Report(RebuildStage.FlushingToDisk, 0, "Flushing to disk");
+                    var flushStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    int flushed = 0;
+                    foreach (var kvp in memStreamsByPath)
+                    {
+                        File.WriteAllBytes(kvp.Key, kvp.Value.ToArray());
+                        flushed++;
+                        Report(RebuildStage.FlushingToDisk, flushed * 100.0 / memStreamsByPath.Count, $"Flushed {flushed} of {memStreamsByPath.Count} file(s)");
+                    }
+                    flushStopwatch.Stop();
+                    System.Diagnostics.Debug.WriteLine(
+                        $"TableRebuilder.RebuildCore [{baseName}]: flushed {memStreamsByPath.Count} in-memory temp file(s) to disk in {flushStopwatch.ElapsedMilliseconds}ms.");
+
+                    newTable.Dispose();
+                }
+                else
+                {
+                    Report(RebuildStage.FlushingToDisk, 100, "Nothing to flush (writing directly to disk)");
+                    newTable.Dispose();
                 }
             }
+
+            // ------------------------------------------------------------
+            // 4b. Restore the pre-rebuild changeCount1/changeCount2 (.DB)
+            //     and write counter (.PX/secondary index) bytes captured in
+            //     step 3, overwriting whatever value the normal per-insert
+            //     increment path above left behind. See the snapshot capture
+            //     above and CreateEmptyTableSkeleton's remarks for why.
+            // ------------------------------------------------------------
+            // This is the last point at which cancellation is safe: nothing
+            // below has touched the original table's files yet, so throwing
+            // here leaves the source table completely untouched (only the
+            // *_rbld.* temp files, cleaned up by the caller/finally above,
+            // are affected).
+            cancellationToken.ThrowIfCancellationRequested();
+            Report(RebuildStage.RestoringMetadata, 0, "Restoring table metadata");
+            if (newSchema == null)
+            {
+                int restored = 0;
+                int toRestore = swapPairs.Count(p => preservedChangeCounts.ContainsKey(Path.GetExtension(p.Temp)));
+                foreach (var pair in swapPairs)
+                {
+                    string ext = Path.GetExtension(pair.Temp);
+                    if (!preservedChangeCounts.TryGetValue(ext, out var saved))
+                        continue;
+
+                    using (var fs = new FileStream(pair.Temp, FileMode.Open, FileAccess.Write, FileShare.None))
+                    {
+                        if (ext.Equals(".DB", StringComparison.OrdinalIgnoreCase))
+                        {
+                            fs.Position = ParadoxHeaderOffsets.ChangeCount1;
+                            fs.WriteByte(saved[0]);
+                            fs.Position = ParadoxHeaderOffsets.ChangeCount2;
+                            fs.WriteByte(saved[1]);
+                        }
+                        else
+                        {
+                            fs.Position = ParadoxHeaderOffsets.WriteCounter;
+                            fs.WriteByte(saved[0]);
+                        }
+                    }
+                    restored++;
+                    if (toRestore > 0)
+                        Report(RebuildStage.RestoringMetadata, restored * 100.0 / toRestore, $"Restored {restored} of {toRestore} file(s)");
+                }
+            }
+            Report(RebuildStage.RestoringMetadata, 100, "Table metadata restored");
 
             // ------------------------------------------------------------
             // 5. Release the original table's file handles/lock so its
             //    files can be deleted, then atomically swap the rebuilt
             //    files back over the originals.
             // ------------------------------------------------------------
+            // Beyond this point the operation is no longer cancellable: files
+            // are actively being swapped, and stopping partway through would
+            // leave the table in a mixed old/new state.
+            Report(RebuildStage.SwappingFiles, 0, "Swapping in rebuilt files");
             table.Dispose();
+            onTableDisposed();
 
+            int swapped = 0;
             foreach (var pair in swapPairs)
             {
                 if (File.Exists(pair.Original))
-                    File.Delete(pair.Original);
+                {
+                    try
+                    {
+                        File.Delete(pair.Original);
+                    }
+                    catch
+                    {
+                        var origFolderPath = Path.GetDirectoryName(pair.Original);
+                        var origFileNameNoExt = Path.GetFileNameWithoutExtension(pair.Original);
+                        var origFileExt = Path.GetExtension(pair.Original);
+                        var tempOrigFileName = origFileNameNoExt + "_old_" + Guid.NewGuid().ToString("N").Substring(0, 8) + origFileExt;
+                        var tempOrigFilePath = Path.Combine(origFolderPath, tempOrigFileName);
+                        try
+                        {
+                            File.Move(pair.Original, tempOrigFilePath); // If we can't delete the original, move it aside so the new file can be moved into place.
+                        }
+                        catch (Exception moveAsideEx)
+                        {
+                            // Couldn't delete AND couldn't even move the original aside (e.g. still
+                            // locked by another process). There's no safe way to proceed: some file
+                            // pairs in this rebuild may already have been swapped while others
+                            // (including this one) were not, so stop immediately rather than risk
+                            // silently leaving the table in a half-rebuilt, inconsistent state.
+                            throw new IOException(
+                                $"Table rebuild aborted: could not delete or move aside the original " +
+                                $"file '{pair.Original}' (still in use?). The rebuild may be left in a " +
+                                $"partially-swapped state; re-run the rebuild once the file is no longer " +
+                                $"locked.", moveAsideEx);
+                        }
+                        TempFilePathsToBeDeletedLater?.Add(tempOrigFilePath); // Orphaned leftover — track it for later cleanup since we couldn't delete it now.
+                    }
+                }
 
-                File.Move(pair.Temp, pair.Original);
+                try
+                {
+                    // We weren't always able to move the original because "The process cannot access the file because it is being used by another process."
+                    File.Move(pair.Temp, pair.Original);
+                }
+                catch
+                {
+                    TempFilePathsToBeDeletedLater?.Add(pair.Temp); // A bit of a hack, but if we can't move the temp file over the original, just copy it and leave the temp file behind for later cleanup.
+                    File.Copy(pair.Temp, pair.Original, overwrite: true);
+                }
+
+                swapped++;
+                Report(RebuildStage.SwappingFiles, swapped * 100.0 / Math.Max(1, swapPairs.Count), $"Swapped {swapped} of {swapPairs.Count} file(s)");
             }
+
+
+            overallStopwatch.Stop();
+            System.Diagnostics.Debug.WriteLine(
+                $"TableRebuilder.RebuildCore [{baseName}]: total rebuild time {overallStopwatch.ElapsedMilliseconds}ms for {migrated} records.");
 
             return new TableRebuildResult
             {
-                TableFilePath   = dbFilePath,
+                TableFilePath = dbFilePath,
                 RecordsMigrated = migrated,
-                RebuiltFiles    = swapPairs.Select(p => p.Original).ToList()
+                RebuiltFiles = swapPairs.Select(p => p.Original).ToList()
             };
+        }
+
+        public static List<string> TempFilePathsToBeDeletedLater = new List<string>(); // TODO: handle these later or just don't worry?
+
+        /// <summary>
+        /// Builds a new record's values for <paramref name="newSchema"/> from
+        /// an old record's values, matching fields by name
+        /// (case-insensitive). Fields with no matching old field become
+        /// null; fields whose old and new types differ are converted via
+        /// <see cref="Convert.ChangeType(object, Type)"/> where possible,
+        /// falling back to null if the value can't be converted.
+        /// </summary>
+        private static object[] RemapValues(
+            object[] oldValues, string[] oldFieldNames, ParadoxFile.FieldInfo[] oldFieldTypes, TableSchemaDefinition newSchema)
+        {
+            var newValues = new object[newSchema.Fields.Count];
+
+            for (int newIndex = 0; newIndex < newSchema.Fields.Count; newIndex++)
+            {
+                var newField = newSchema.Fields[newIndex];
+                int oldIndex = Array.FindIndex(oldFieldNames,
+                    n => string.Equals(n, newField.Name, StringComparison.OrdinalIgnoreCase));
+                if (oldIndex < 0 || oldIndex >= oldValues.Length)
+                    continue;
+
+                object oldValue = oldValues[oldIndex];
+                if (oldValue == null)
+                    continue;
+
+                if (oldFieldTypes[oldIndex].fType == newField.Type)
+                {
+                    newValues[newIndex] = oldValue;
+                    continue;
+                }
+
+                newValues[newIndex] = TryConvertValue(oldValue, newField.Type);
+            }
+
+            return newValues;
+        }
+
+        private static object TryConvertValue(object value, ParadoxFieldTypes targetType)
+        {
+            try
+            {
+                switch (targetType)
+                {
+                    case ParadoxFieldTypes.Alpha:
+                        return Convert.ToString(value);
+                    case ParadoxFieldTypes.Short:
+                        return Convert.ToInt16(value);
+                    case ParadoxFieldTypes.Long:
+                    case ParadoxFieldTypes.AutoInc:
+                        return Convert.ToInt32(value);
+                    case ParadoxFieldTypes.Currency:
+                    case ParadoxFieldTypes.Number:
+                        return Convert.ToDouble(value);
+                    case ParadoxFieldTypes.Logical:
+                        return Convert.ToBoolean(value);
+                    case ParadoxFieldTypes.Date:
+                    case ParadoxFieldTypes.Time:
+                    case ParadoxFieldTypes.Timestamp:
+                        return Convert.ToDateTime(value);
+                    default:
+                        // Memo/blob/bytes/BCD and other complex types aren't
+                        // safely convertible from an arbitrary source type.
+                        return null;
+                }
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // ----------------------------------------------------------------
@@ -210,26 +765,121 @@ namespace ParadoxReader
         /// <summary>
         /// Clones just the header portion of a .DB/.PX/.Xnn/.Xgn/.Ynn/.Ygn
         /// file (preserving schema, field definitions, table name, sort
-        /// order, and autoIncVal) and resets the fields that describe its
-        /// (now empty) data: RecordCount, block chain pointers, PX root
-        /// block id/level count, change counters, and maxBlocks.
+        /// order, and its own existing autoIncVal) and resets the fields
+        /// that describe its (now empty) data: RecordCount, block chain
+        /// pointers, PX root block id/level count, change counters, and
+        /// maxBlocks.
         /// </summary>
         private static void CreateEmptyTableSkeleton(string srcPath, string destPath)
         {
             byte[] header = ReadHeaderBytes(srcPath);
 
+            var fileType = (ParadoxFileType)header[ParadoxHeaderOffsets.FileType];
+            bool isSecondaryIndex =
+                fileType == ParadoxFileType.XnnFileNonInc || fileType == ParadoxFileType.XnnFileInc ||
+                fileType == ParadoxFileType.YnnFile ||
+                fileType == ParadoxFileType.XgnFileNonInc || fileType == ParadoxFileType.XgnFileInc ||
+                fileType == ParadoxFileType.YgnFile;
+
             ZeroRegion(header, ParadoxHeaderOffsets.RecordCount, 4);
             ZeroRegion(header, ParadoxHeaderOffsets.BlockChain, 8); // nextBlock+fileBlocks+firstBlock+lastBlock
             ZeroRegion(header, ParadoxHeaderOffsets.PxRootBlockId, 2);
             ZeroRegion(header, ParadoxHeaderOffsets.PxLevelCount, 1);
-            ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount1, 1);
-            ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount2, 1);
+            // NOTE: changeCount1/changeCount2 (0x2D/0x2E) and the .PX/secondary
+            // index writeCounter (0x2C) are deliberately NOT zeroed here anymore.
+            // Binary-search bisection against a minimal single-PK-only repro
+            // table (no secondary indexes) proved these bytes are the actual
+            // discriminating fields behind Paradox 7/SQLRunner's "Index is out
+            // of date" rejection of our rebuilt tables: a clean, single-pass
+            // BDE Pdxrbld rebuild of the exact same source file leaves its .DB
+            // changeCount1/changeCount2 and its .PX writeCounter completely
+            // UNCHANGED from the pre-rebuild source (verified byte-for-byte
+            // identical, and reproducible across repeated independent Pdxrbld
+            // runs on the same input). Our previous implementation zeroed
+            // these fields and let the normal per-record-insert increment path
+            // (ParadoxTableFile.IncrementChangeCount /
+            // PrimaryIndexFile.IncrementWriteCounter /
+            // SecondaryIndexFile.IncrementWriteCounter) recompute them from 0
+            // during the rebuild's record-reinsertion loop, which produced a
+            // value equal to the migrated record count instead of the
+            // preserved original value - this is corrected below in
+            // RebuildCore, which snapshots these exact bytes before the
+            // rebuild and restores them verbatim afterward once every record
+            // has been re-inserted.
             ZeroRegion(header, ParadoxHeaderOffsets.MaxBlocks, 2);
+
+            // autoIncVal (@0x49) semantics were re-derived via a 4-case
+            // SQLRunner "oracle" matrix (SELECT COUNT(*) via SQLRunner
+            // returns exactly 1 row when the index is structurally valid,
+            // and silently falls back to a degenerate scan returning N rows
+            // when it is not) covering: single-field INTEGER PK + secondary
+            // index, composite 2-field INTEGER PK, AUTOINC PK + two
+            // secondary indexes, and no PK (no .PX) + one secondary index.
+            // Every case with a .PX file failed real BDE/Paradox 7
+            // validation ("Index is out of date") after this rebuild left
+            // its pre-existing, stale autoIncVal byte value untouched in
+            // the skeleton. Real BDE's own Pdxrbld rebuild was independently
+            // confirmed (across all three .PX-bearing cases, regardless of
+            // PK shape or whether the table even had an AutoInc field) to
+            // always write exactly 1 into .PX's autoIncVal, so that is
+            // reproduced explicitly below. Secondary index
+            // (.Xnn/.Xgn/.Ynn/.Ygn) autoIncVal is left as whatever the clone
+            // carried over: every record is re-inserted into this skeleton
+            // via the normal ParadoxTableFile.InsertRecord path, which calls
+            // IndexManager.SyncAutoIncVal(...) itself whenever an AutoInc
+            // field is assigned (see ParadoxTableFile.AssignAutoIncValues),
+            // so those files' autoIncVal ends up correctly reflecting their
+            // own real usage regardless of this skeleton's starting value.
+            if (fileType == ParadoxFileType.PxFile)
+                Array.Copy(BitConverter.GetBytes(1), 0, header, ParadoxHeaderOffsets.AutoIncVal, 4);
 
             // changeCount4 (V4Hdr) only physically exists when the header
             // region is large enough to contain it.
             if (header.Length >= ParadoxHeaderOffsets.ChangeCount4 + 2)
                 ZeroRegion(header, ParadoxHeaderOffsets.ChangeCount4, 2);
+
+            if (isSecondaryIndex)
+            {
+                // BDE/SQLRunner always creates a fresh secondary index (.Xnn/.Xgn/
+                // .Ynn/.Ygn) file with one pre-allocated (but empty) root block -
+                // the on-disk file is never just the bare header. Empirically
+                // confirmed against SQLRunner-created FRESHRBLD.XG0/.YG0: the
+                // block-chain fields (nextBlock/fileBlocks/firstBlock/lastBlock)
+                // are all 1, maxBlocks is 1, pxRootBlockId is the file's own
+                // block-numbering base (0 for XgnFile* types, 1 otherwise), and
+                // the block itself is the same "empty root" sentinel that
+                // SecondaryIndexFile.AllocateBlock/WriteBlock already reuses on
+                // the very first insert (see SecondaryIndexFile.OnBlockChanged).
+                // Cloning only the header (as done for .DB/.PX) leaves the
+                // rebuilt index 2048 bytes short of this and structurally
+                // incompatible with BDE, even though our own reader never
+                // required the extra block to function.
+                ushort blockBase = (fileType == ParadoxFileType.XgnFileNonInc || fileType == ParadoxFileType.XgnFileInc)
+                    ? (ushort)0 : (ushort)1;
+                int blockSize = header[ParadoxHeaderOffsets.MaxTableSize] * 0x400;
+
+                header[ParadoxHeaderOffsets.BlockChain] = 1;     // nextBlock
+                header[ParadoxHeaderOffsets.BlockChain + 2] = 1; // fileBlocks
+                header[ParadoxHeaderOffsets.BlockChain + 4] = 1; // firstBlock
+                header[ParadoxHeaderOffsets.BlockChain + 6] = 1; // lastBlock
+                Array.Copy(BitConverter.GetBytes(blockBase), 0, header, ParadoxHeaderOffsets.PxRootBlockId, 2);
+                Array.Copy(BitConverter.GetBytes((ushort)1), 0, header, ParadoxHeaderOffsets.MaxBlocks, 2);
+
+                var rootBlock = new byte[blockSize];
+                // Empty-root-block sentinel: leftChild=0, reserved=0,
+                // usedBytes=0xFFF8 (observed verbatim in SQLRunner-created
+                // empty secondary indexes; overwritten with real entry data
+                // by SecondaryIndexFile.WriteBlock on first insert).
+                rootBlock[4] = 0xF8;
+                rootBlock[5] = 0xFF;
+
+                using (var fs = new FileStream(destPath, FileMode.Create, FileAccess.Write))
+                {
+                    fs.Write(header, 0, header.Length);
+                    fs.Write(rootBlock, 0, rootBlock.Length);
+                }
+                return;
+            }
 
             File.WriteAllBytes(destPath, header);
         }
@@ -270,6 +920,24 @@ namespace ParadoxReader
                 fs.Position = 0;
                 return r.ReadBytes(headerSize);
             }
+        }
+
+        /// <summary>
+        /// Reads all bytes of <paramref name="path"/> into a new,
+        /// expandable <see cref="MemoryStream"/> (rewound to position 0).
+        /// <see cref="MemoryStream(byte[])"/> is deliberately avoided since
+        /// it produces a fixed-size, non-expandable buffer that throws
+        /// "Memory stream is not expandable" once a caller (e.g.
+        /// <see cref="BlockManager"/> allocating a new block) needs to grow
+        /// it past its initial length.
+        /// </summary>
+        private static MemoryStream LoadExpandableMemoryStream(string path)
+        {
+            byte[] initialBytes = File.ReadAllBytes(path);
+            var ms = new MemoryStream(initialBytes.Length);
+            ms.Write(initialBytes, 0, initialBytes.Length);
+            ms.Position = 0;
+            return ms;
         }
 
         private static void ZeroRegion(byte[] data, int offset, int length)

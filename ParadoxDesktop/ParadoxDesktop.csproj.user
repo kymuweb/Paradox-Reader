@@ -1,0 +1,27 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup />
+  <ItemGroup>
+    <Compile Update="IndexFieldsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="MemoEditorForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ParadoxDesktopMainForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="RebuildProgressForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="SqlEditorForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="TableEditorForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="TableStructureForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+</Project>
