@@ -58,7 +58,7 @@ namespace ParadoxTest
             var psi = new ProcessStartInfo
             {
                 FileName = ExePath,
-                Arguments = string.Format("\"/F{0}\" \"/T{1}\" -R2 {2} -L+ -Q+", dataFolder, tableFileName, pack ? "-P+" : "-P-"),
+                Arguments = string.Format("\"/F{0}\" \"/T{1}\" \"/Pcfjxcut\" -R2 {2} -L+ -Q+", dataFolder, tableFileName, pack ? "-P+" : "-P-"),
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
