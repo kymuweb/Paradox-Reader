@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
@@ -359,6 +359,14 @@ namespace ParadoxReader
             this.reader = new BinaryReader(stream);
             stream.Position = 0;
             this.ReadHeader();
+
+            // BDE encrypts index blocks (not just .DB blocks) of password-protected tables.
+            if (FileType != ParadoxFileType.DbFileIndexed && FileType != ParadoxFileType.DbFileNotIndexed
+                && IsEncrypted && EncryptionKey != 0xFF00FF00 && maxTableSize > 0)
+            {
+                this.stream = new BlockCryptStream(stream, headerSize, maxTableSize * 0x400, EncryptionKey);
+                this.reader = new BinaryReader(this.stream);
+            }
         }
 
         public virtual void Dispose()
