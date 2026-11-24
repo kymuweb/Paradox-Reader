@@ -273,6 +273,24 @@ namespace ParadoxReader
                 xg.Companion = yg;
                 yg.ManagedByCompanion = true;
             }
+
+            // The legacy BDE writer never updates non-maintained indexes (or their .Yxx companion);
+            // Pdxrbld regenerates them. Writing them made Pdxrbld's verify step crash.
+            var skip = new HashSet<SecondaryIndexFile>();
+            foreach (var idx in secondaryIndexes)
+                if (idx.IsNonMaintained)
+                {
+                    skip.Add(idx);
+                    string ext = Path.GetExtension(idx.FilePath);
+                    if (ext.Length >= 3)
+                    {
+                        string yPath = Path.ChangeExtension(idx.FilePath, ".Y" + ext.Substring(2));
+                        var y = secondaryIndexes.Find(s => string.Equals(s.FilePath, yPath, StringComparison.OrdinalIgnoreCase));
+                        if (y != null) skip.Add(y);
+                    }
+                }
+            foreach (var idx in skip) idx.Dispose();
+            secondaryIndexes.RemoveAll(skip.Contains);
         }
 
         // ----------------------------------------------------------------

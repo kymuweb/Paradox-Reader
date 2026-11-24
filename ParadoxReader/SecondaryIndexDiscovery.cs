@@ -24,14 +24,14 @@ namespace ParadoxReader
             // C:\data\!transac.X06/.X07/.X08/.X0B/.X0F/.X17).
             TryScanPattern(dir, name, "X",  hex: true,  padWidth: 2, from: 0, to: 0xFF, allFields, primaryKeyFieldCount, result);
 
-            // Incremental (composite) secondary indexes: .XG0 - .XG9
-            TryScanPattern(dir, name, "XG", hex: false, padWidth: 1, from: 0, to: 9,   allFields, primaryKeyFieldCount, result);
+            // Incremental (composite) secondary indexes: .XG0 - .XGF (hex; e.g. Communication.XGA/.XGB)
+            TryScanPattern(dir, name, "XG", hex: true,  padWidth: 1, from: 0, to: 0xF, allFields, primaryKeyFieldCount, result);
 
             // Maintained-field companions to non-incremental indexes: .Y00 - .YFF
             TryScanPattern(dir, name, "Y",  hex: true,  padWidth: 2, from: 0, to: 0xFF, allFields, primaryKeyFieldCount, result);
 
-            // Maintained-field companions to incremental indexes: .YG0 - .YG9
-            TryScanPattern(dir, name, "YG", hex: false, padWidth: 1, from: 0, to: 9,   allFields, primaryKeyFieldCount, result);
+            // Maintained-field companions to incremental indexes: .YG0 - .YGF
+            TryScanPattern(dir, name, "YG", hex: true,  padWidth: 1, from: 0, to: 0xF, allFields, primaryKeyFieldCount, result);
 
             return result;
         }
@@ -145,7 +145,10 @@ namespace ParadoxReader
                     // misinterpreted as extra indexed columns.
                     for (int i = 0; i < primaryKeyFieldCount && i < allFields.Length; i++)
                     {
-                        if (fieldIndices.Contains(i)) continue;
+                        // BDE stores every PK field after the indexed fields, even one that is also
+                        // the indexed field (e.g. !duplcte.X02 = Account + Patient + Account). Only skip
+                        // the overlap when the header has no room for it.
+                        if (fieldIndices.Contains(i) && fieldIndices.Count + (primaryKeyFieldCount - i) > totalKeyFields) continue;
                         indexedFields.Add(allFields[i]);
                         fieldIndices.Add(i);
                     }

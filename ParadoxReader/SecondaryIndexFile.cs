@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -600,7 +600,7 @@ namespace ParadoxReader
             // Both count modulo 255 (0xFE -> 0x00), matching the Ygn/PX counters; verified over
             // 710 legacy writes. Wrapping 0x2D through 0xFF drifts from the Ygn counter and
             // BDE reports "Index version does not match table version" on the Ygn.
-            if (indexFile.FileType != ParadoxFileType.XgnFileInc) return;
+            if (!IsIncrementalFlat) return;
             foreach (int offset in new[] { 0x2D, 0x2F })
             {
                 indexFile.stream.Position = offset;
@@ -610,6 +610,19 @@ namespace ParadoxReader
                 indexFile.stream.WriteByte(cur >= 0xFE ? (byte)0 : (byte)(cur + 1));
             }
         }
+
+        // Numbered .Xnn secondaries use the same BDE flat-table layout as .Xgn when their
+        // pointer is 2 bytes (key + primary key + DB block hint); B-tree handling corrupted them.
+        private bool IsFlatFormatType =>
+            indexFile.FileType == ParadoxFileType.XgnFileNonInc || indexFile.FileType == ParadoxFileType.XgnFileInc ||
+            indexFile.FileType == ParadoxFileType.XnnFileNonInc || indexFile.FileType == ParadoxFileType.XnnFileInc;
+
+        /// <summary>Non-maintained (non-incremental) secondary index: BDE leaves it untouched on writes.</summary>
+        internal bool IsNonMaintained =>
+            indexFile.FileType == ParadoxFileType.XgnFileNonInc || indexFile.FileType == ParadoxFileType.XnnFileNonInc;
+
+        private bool IsIncrementalFlat =>
+            indexFile.FileType == ParadoxFileType.XgnFileInc || indexFile.FileType == ParadoxFileType.XnnFileInc;
 
         private bool IsAggregateIndex => indexFile.FileType == ParadoxFileType.YgnFile;
 
@@ -672,7 +685,7 @@ namespace ParadoxReader
         /// via next/prev block pointers. Never a B-tree (root/levels stay 0).
         /// </summary>
         internal bool IsFlatTable =>
-            pointerSize < 6 && (indexFile.FileType == ParadoxFileType.XgnFileNonInc || indexFile.FileType == ParadoxFileType.XgnFileInc);
+            pointerSize < 6 && IsFlatFormatType;
 
         /// <summary>The Ygn companion of a flat Xgn (one entry per Xgn block).</summary>
         internal SecondaryIndexFile Companion { get; set; }
@@ -724,7 +737,9 @@ namespace ParadoxReader
 
         private IEnumerable<FlatBlock> FlatChain()
         {
-            if (indexFile.RecordCount <= 0 || indexFile.fileBlocks == 0) yield break;
+            // Don't gate on RecordCount: on the first insert into an empty table it is only
+            // synced after OnRowAppended, which left the Ygn companion empty (Pdxrbld verify crash).
+            if (indexFile.fileBlocks == 0) yield break;
             var visited = new HashSet<ushort>();
             ushort n = indexFile.firstBlock == 0 ? (ushort)1 : indexFile.firstBlock;
             while (n != 0 && n <= indexFile.fileBlocks && visited.Add(n))
@@ -840,6 +855,12 @@ namespace ParadoxReader
                 if (b.Rows.Count > 0)
                     entries.Add(new PxEntry(xg.FlatKey(b.Rows[0]), b.Number, (ushort)b.Rows.Count));
 
+            if (indexFile.pxLevelCount >= 2 && indexFile.fileBlocks > 1)
+            {
+                RebuildTwoLevelFromFlat(entries);
+                return;
+            }
+
             if (entries.Count == 0 || entries.Count > blockCapacity / entrySize)
             {
                 System.Diagnostics.Debug.WriteLine(
@@ -855,6 +876,120 @@ namespace ParadoxReader
             UpdateRootBlockId(root.BlockNumber);
             UpdateLevelCount(1);
             UpdateRecordCount(entries.Count);
+        }
+
+        /// <summary>
+        /// Updates a multi-block (root + chained leaves) Ygn in place, as BDE does: existing
+        /// leaves keep their Xgn entries (refreshed key/count), new Xgn blocks are inserted after
+        /// their chain predecessor, overflowing leaves split into a block appended at the end of
+        /// the file and linked after the original. The root holds one entry per leaf
+        /// (first key, leaf number, total rows).
+        /// </summary>
+        private void RebuildTwoLevelFromFlat(List<PxEntry> xgEntries)
+        {
+            int maxEntries = Math.Max(blockCapacity / entrySize, 1);
+            var root = ReadBlock(RootBlockNumber);
+            var byXg = new Dictionary<ushort, PxEntry>();
+            var chainIndex = new Dictionary<ushort, int>();
+            for (int i = 0; i < xgEntries.Count; i++) { byXg[xgEntries[i].BlockNumber] = xgEntries[i]; chainIndex[xgEntries[i].BlockNumber] = i; }
+
+            var leaves = new List<PxBlock>();
+            var prevs = new Dictionary<ushort, ushort>();
+            foreach (var re in root.Entries)
+            {
+                var leaf = ReadBlock(re.BlockNumber);
+                prevs[leaf.BlockNumber] = ReadRawPrev(leaf.BlockNumber);
+                leaves.Add(leaf);
+            }
+
+            var placed = new HashSet<ushort>();
+            foreach (var leaf in leaves)
+            {
+                var rebuilt = new List<PxEntry>();
+                foreach (var e in leaf.Entries)
+                {
+                    if (!byXg.TryGetValue(e.BlockNumber, out var cur) || !placed.Add(e.BlockNumber)) continue;
+                    rebuilt.Add(cur);
+                    for (int j = chainIndex[e.BlockNumber] + 1; j < xgEntries.Count && !IsInAnyLeaf(leaves, xgEntries[j].BlockNumber); j++)
+                        if (placed.Add(xgEntries[j].BlockNumber)) rebuilt.Add(xgEntries[j]);
+                }
+                leaf.Entries = rebuilt;
+            }
+            if (placed.Count != xgEntries.Count)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[SecondaryIndexFile.RebuildTwoLevelFromFlat] Skipped '{FilePath}': {xgEntries.Count - placed.Count} Xgn blocks could not be placed.");
+                return;
+            }
+            leaves.RemoveAll(l => l.Entries.Count == 0);
+
+            ushort fileBlocks = indexFile.fileBlocks;
+            ushort lastBlock  = indexFile.lastBlock;
+            for (int i = 0; i < leaves.Count; i++)
+            {
+                var leaf = leaves[i];
+                if (leaf.Entries.Count <= maxEntries) continue;
+                fileBlocks++;
+                indexFile.stream.SetLength(Math.Max(indexFile.stream.Length, indexFile.headerSize + (long)fileBlocks * FlatBlockSize));
+                int keep = (leaf.Entries.Count + 1) / 2;
+                var nb = new PxBlock { BlockNumber = fileBlocks, Capacity = blockCapacity, LeftChildBlockNumber = leaf.LeftChildBlockNumber };
+                nb.Entries.AddRange(leaf.Entries.GetRange(keep, leaf.Entries.Count - keep));
+                leaf.Entries.RemoveRange(keep, leaf.Entries.Count - keep);
+                prevs[nb.BlockNumber] = leaf.BlockNumber;
+                if (leaf.LeftChildBlockNumber != 0)
+                {
+                    var after = leaves.Find(l => l.BlockNumber == leaf.LeftChildBlockNumber);
+                    if (after != null) prevs[after.BlockNumber] = nb.BlockNumber;
+                    else WriteRawPrev(leaf.LeftChildBlockNumber, nb.BlockNumber);
+                }
+                else lastBlock = nb.BlockNumber;
+                leaf.LeftChildBlockNumber = nb.BlockNumber;
+                leaves.Insert(i + 1, nb);
+            }
+
+            if (leaves.Count > maxEntries)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[SecondaryIndexFile.RebuildTwoLevelFromFlat] Skipped '{FilePath}': {leaves.Count} leaves exceed a single root block.");
+                return;
+            }
+
+            int total = 0;
+            root.Entries = new List<PxEntry>();
+            foreach (var leaf in leaves)
+            {
+                int rows = 0;
+                foreach (var e in leaf.Entries) rows += e.RecordCount;
+                root.Entries.Add(new PxEntry(leaf.Entries[0].KeyData, leaf.BlockNumber, (ushort)rows));
+                WriteBlock(leaf);
+                WriteRawPrev(leaf.BlockNumber, prevs.TryGetValue(leaf.BlockNumber, out var p) ? p : (ushort)0);
+                total += leaf.Entries.Count;
+            }
+            WriteBlock(root);
+            WriteFlatHeader(fileBlocks, indexFile.firstBlock == 0 ? (ushort)1 : indexFile.firstBlock, lastBlock);
+            UpdateRecordCount(total + root.Entries.Count);
+        }
+
+        private static bool IsInAnyLeaf(List<PxBlock> leaves, ushort xgBlock)
+        {
+            foreach (var l in leaves)
+                foreach (var e in l.Entries)
+                    if (e.BlockNumber == xgBlock) return true;
+            return false;
+        }
+
+        private ushort ReadRawPrev(ushort blockNumber)
+        {
+            indexFile.stream.Position = indexFile.headerSize + (long)(blockNumber - blockBase) * FlatBlockSize + 2;
+            int lo = indexFile.stream.ReadByte(), hi = indexFile.stream.ReadByte();
+            return (ushort)((lo < 0 ? 0 : lo) | ((hi < 0 ? 0 : hi) << 8));
+        }
+
+        private void WriteRawPrev(ushort blockNumber, ushort prev)
+        {
+            indexFile.stream.Position = indexFile.headerSize + (long)(blockNumber - blockBase) * FlatBlockSize + 2;
+            indexFile.stream.WriteByte((byte)prev);
+            indexFile.stream.WriteByte((byte)(prev >> 8));
         }
 
         private PxBlock GetAggregateBlock()
@@ -916,7 +1051,7 @@ namespace ParadoxReader
         /// </summary>
         internal int ReadXgnVersionCounter()
         {
-            if (indexFile.FileType != ParadoxFileType.XgnFileInc) return -1;
+            if (!IsIncrementalFlat) return -1;
             indexFile.stream.Position = 0x2F;
             return indexFile.stream.ReadByte();
         }
@@ -929,7 +1064,7 @@ namespace ParadoxReader
             indexFile.stream.Position = ParadoxHeaderOffsets.WriteCounter;
             int current = indexFile.stream.ReadByte();
             if (current < 0) current = 0;
-            byte next = indexFile.FileType == ParadoxFileType.XgnFileInc
+            byte next = IsIncrementalFlat
                 ? (byte)Math.Min(current + delta, 255)
                 : (byte)((current + delta) % 255);
             indexFile.stream.Position = ParadoxHeaderOffsets.WriteCounter;
@@ -986,7 +1121,7 @@ namespace ParadoxReader
         {
             // BDE-format XG files (2-byte pointers) hold only the leaf level as a block chain; the tree lives in
             // the YG file. Their DB block numbers can collide with in-file block numbers, so never treat them as branches.
-            if (pointerSize < 6 && (indexFile.FileType == ParadoxFileType.XgnFileNonInc || indexFile.FileType == ParadoxFileType.XgnFileInc))
+            if (pointerSize < 6 && IsFlatFormatType)
                 return true;
 
             return node.Entries.Count == 0 || (pointerSize >= 6
