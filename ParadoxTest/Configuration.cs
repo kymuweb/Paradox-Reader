@@ -142,5 +142,26 @@ namespace ParadoxTest
                 return string.Empty;
             }
         }
+
+        // Passwords passed to Pdxrbld (one /P argument each) so password-protected
+        // tables never block on its "Enter master password" prompt. Configured via
+        // appSettings key "PdxrbldPasswords" (semicolon-separated) in the git-ignored
+        // SqlRunner.local.config. Defaults to the example password "cfjxcut".
+        internal static string[] GetPdxrbldPasswords()
+        {
+            string value = null;
+            try
+            {
+                value = System.Configuration.ConfigurationManager.AppSettings["PdxrbldPasswords"];
+            }
+            catch
+            {
+            }
+            if (string.IsNullOrWhiteSpace(value)) return new[] { "cfjxcut" };
+            return value.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0)
+                .ToArray();
+        }
     }
 }

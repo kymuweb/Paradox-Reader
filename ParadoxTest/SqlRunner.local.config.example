@@ -8,4 +8,6 @@
 	<add key="SqlRunnerExePath" value="C:\Temp\ParadoxSQLRunner.exe" />
 	<add key="CorpusDataRootPath" value="C:\Temp\ParadoxData" />
 	<add key="PdxrbldExePath" value="C:\Temp\Pdxrbld.exe" />
+	<!-- Semicolon-separated; each is passed to Pdxrbld as a /P argument. -->
+	<add key="PdxrbldPasswords" value="cfjxcut" />
 </appSettings>

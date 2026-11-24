@@ -21,7 +21,11 @@ namespace ParadoxTest
         public static int Run(string mode, int batches, int batchSize)
         {
             string data = LegacyWriteRows.LegacyWriteRowsDatabaseFolderPath;
-            if (string.IsNullOrEmpty(data)) data = @"C:\medilink32bnt\data";
+            if (string.IsNullOrEmpty(data))
+            {
+                Console.WriteLine("[cvlstress] LegacyWriteRowsDatabaseFolderPath not configured; aborting.");
+                return 1;
+            }
             string root = Path.Combine(@"C:\temp", "cvlstress_" + mode + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
             string backup = Path.Combine(root, "backup");
             Directory.CreateDirectory(root);
@@ -110,7 +114,7 @@ namespace ParadoxTest
                 { "VersionBuildDate", new DateTime(2026, 1, 1).AddDays(rng.Next(0, 300)) },
                 { "ComputerName", "PC-" + client + "-" + rng.Next(1, 6) },
                 { "UserName", "user" + rng.Next(1, 900) },
-                { "ServerBaseDir", @"C:\medilink32bnt" },
+                { "ServerBaseDir", @"C:\Server\Base\Dir" },
                 { "ClientId", client },
                 { "OperatingSystem", rng.Next(0, 3) == 0 ? "Windows 10" : "Windows 11" },
                 { "DateTime", new DateTime(2026, 11, 6, 8, 0, 0).AddSeconds(n) },

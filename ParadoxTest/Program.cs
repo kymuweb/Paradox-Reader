@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -34,12 +34,22 @@ namespace ParadoxTest
                     args.Length > 4 && args[4] == "quiet");
                 return;
             }
+            if (args != null && args.Length > 0 && args[0] == "alltablewrite")
+            {
+                int max = int.MaxValue;
+                if (args.Length > 3) int.TryParse(args[3], out max);
+                Environment.ExitCode = AllTableWriteComparisonTest.Run(
+                    args.Length > 1 && args[1] != "-" ? args[1] : null,
+                    args.Length > 2 && args[2] != "-" ? args[2] : null,
+                    max);
+                return;
+            }
             if (args != null && args.Length > 0 && args[0] == "concurrenttest")
             {
                 int cp = 3, cr = 300;
                 if (args.Length > 2) int.TryParse(args[2], out cp);
                 if (args.Length > 3) int.TryParse(args[3], out cr);
-                Environment.ExitCode = ConcurrentWriteTest.Run(args.Length > 1 ? args[1] : @"C:\medilink32bnt\data\ClientVersionLog.indexfixed_202611050741.DB", cp, cr);
+                Environment.ExitCode = ConcurrentWriteTest.Run(args.Length > 1 ? args[1] : Path.Combine(LegacyWriteRows.LegacyWriteRowsDatabaseFolderPath, "ClientVersionLog.indexfixed_202611050741.DB"), cp, cr);
                 return;
             }
             if (args != null && args.Length > 0 && args[0] == "cvlstress")
@@ -55,7 +65,7 @@ namespace ParadoxTest
                 int sb = 150, ss = 100;
                 if (args.Length > 2) int.TryParse(args[2], out sb);
                 if (args.Length > 3) int.TryParse(args[3], out ss);
-                Environment.ExitCode = ServiceSimTest.Run(args.Length > 1 ? args[1] : @"C:\medilink32bnt\data\ClientVersionLog.indexfixed_202611060803.DB", sb, ss, args.Length > 4 ? args[4] : null);
+                Environment.ExitCode = ServiceSimTest.Run(args.Length > 1 ? args[1] : Path.Combine(LegacyWriteRows.LegacyWriteRowsDatabaseFolderPath, "ClientVersionLog.indexfixed_202611060803.DB"), sb, ss, args.Length > 4 ? args[4] : null);
                 return;
             }
             if (args != null && args.Length > 3 && args[0] == "concurrentworker")

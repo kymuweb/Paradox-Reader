@@ -8,10 +8,10 @@ using static ParadoxTest.LegacyWriteRows;
 namespace ParadoxTest
 {
     /// <summary>
-    /// Wrapper around the legacy Medilink WriteRows.exe tool.
+    /// Wrapper around the legacy WriteRows.exe tool.
     /// NOTE: this is for KNOWN STRUCTURES ONLY. WriteRows.exe can only write to the pre-existing tables
     /// (with their existing schemas) in the legacy database folder (LegacyWriteRowsDatabaseFolderPath,
-    /// e.g. C:\medilink32bnt\data); it cannot create tables or write to arbitrary/generated tables.
+    /// e.g. C:\Temp\data); it cannot
     /// Tests using it must therefore operate on a real table in that folder (back it up first and restore it afterwards).
     /// </summary>
     public static class LegacyWriteRows
