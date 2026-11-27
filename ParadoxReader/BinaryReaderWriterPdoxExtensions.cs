@@ -385,10 +385,14 @@ namespace ParadoxReader
             writer.WritePdoxNum<double>(value, dataSize);
         }
 
+        // A bit conflicted on if this should return null or MinValue, going with MinValue for now for simplicity.
         public static DateTime ReadPdoxDate(this BinaryReader reader, int dataSize)
         {
             var days = reader.ReadPdoxInt(dataSize);
-            return new DateTime(1, 1, 1).AddDays(days > 0 ? days - 1 : 0);
+            var offset = days > 0 ? days - 1 : 0;
+            if (offset > (DateTime.MaxValue - DateTime.MinValue).Days)
+                return DateTime.MinValue; // out of range for DateTime
+            return new DateTime(1, 1, 1).AddDays(offset);
         }
 
         public static void WritePdoxDate(this BinaryWriter writer, DateTime value, int dataSize)
@@ -398,10 +402,13 @@ namespace ParadoxReader
             writer.WritePdoxInt(days, dataSize);
         }
 
+        // A bit conflicted on if this should return null or MinValue, going with MinValue for now for simplicity.
         public static TimeSpan ReadPdoxTime(this BinaryReader reader, int dataSize)
         {
             var msInt = reader.ReadPdoxInt(dataSize);
-            return TimeSpan.FromMilliseconds((double)(msInt >= 0 ? msInt : 0));
+            if (msInt < 0 || msInt >= 86400000)
+                return TimeSpan.MinValue; // out of range for a time of day
+            return TimeSpan.FromMilliseconds((double)msInt);
         }
 
         public static void WritePdoxTime(this BinaryWriter writer, TimeSpan value, int dataSize)
@@ -411,11 +418,17 @@ namespace ParadoxReader
             writer.WritePdoxInt(msInt, dataSize);
         }
 
+        // A bit conflicted on if this should return null or MinValue, going with MinValue for now for simplicity.
         public static DateTime ReadPdoxTimestamp(this BinaryReader reader, int dataSize)
         {
             var msDbl = reader.ReadPdoxDouble(dataSize);
-            // TODO: Handle too large a value?
-            return new DateTime(1, 1, 1).AddMilliseconds(msDbl >= 0 ? msDbl : 0).AddDays(msDbl >= 86400000 ? -1 : 0);
+            if (double.IsNaN(msDbl) || double.IsInfinity(msDbl))
+                return DateTime.MinValue;
+            var ms = msDbl >= 0 ? msDbl : 0;
+            if (msDbl >= 86400000) ms -= 86400000;
+            if (ms > (DateTime.MaxValue - DateTime.MinValue).TotalMilliseconds)
+                return DateTime.MinValue; // out of range for DateTime
+            return new DateTime(1, 1, 1).AddMilliseconds(ms);
         }
 
         public static void WritePdoxTimestamp(this BinaryWriter writer, DateTime value, int dataSize)

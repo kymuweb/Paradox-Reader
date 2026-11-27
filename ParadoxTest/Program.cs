@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
 
 namespace ParadoxTest
 {
@@ -15,8 +18,86 @@ namespace ParadoxTest
     /// </summary>
     internal class Program
     {
+
+
+
         static void Main(string[] args)
         {
+
+            int legacyTestRowCount;
+            if (args != null && args.Length > 0 && args[0] == "writeindextest")
+            {
+                int witRounds = 5;
+                if (args.Length > 1) int.TryParse(args[1], out witRounds);
+                IndexWriteLookupTest.Run(witRounds, args.Length > 2 ? args[2] : "ClientVersionLog",
+                    args.Length > 3 ? args[3].Split(',') : null,
+                    args.Length > 4 && args[4] == "quiet");
+                return;
+            }
+            if (args != null && args.Length > 0 && args[0] == "alltablewrite")
+            {
+                int max = int.MaxValue;
+                if (args.Length > 3) int.TryParse(args[3], out max);
+                Environment.ExitCode = AllTableWriteComparisonTest.Run(
+                    args.Length > 1 && args[1] != "-" ? args[1] : null,
+                    args.Length > 2 && args[2] != "-" ? args[2] : null,
+                    max);
+                return;
+            }
+            if (args != null && args.Length > 0 && args[0] == "concurrenttest")
+            {
+                int cp = 3, cr = 300;
+                if (args.Length > 2) int.TryParse(args[2], out cp);
+                if (args.Length > 3) int.TryParse(args[3], out cr);
+                Environment.ExitCode = ConcurrentWriteTest.Run(args.Length > 1 ? args[1] : Path.Combine(LegacyWriteRows.LegacyWriteRowsDatabaseFolderPath, "ClientVersionLog.indexfixed_202611050741.DB"), cp, cr);
+                return;
+            }
+            if (args != null && args.Length > 0 && args[0] == "cvlstress")
+            {
+                int cb = 120, cs = 100;
+                if (args.Length > 2) int.TryParse(args[2], out cb);
+                if (args.Length > 3) int.TryParse(args[3], out cs);
+                Environment.ExitCode = ClientVersionLogStressTest.Run(args.Length > 1 ? args[1] : "reader", cb, cs);
+                return;
+            }
+            if (args != null && args.Length > 0 && args[0] == "servicesimtest")
+            {
+                int sb = 150, ss = 100;
+                if (args.Length > 2) int.TryParse(args[2], out sb);
+                if (args.Length > 3) int.TryParse(args[3], out ss);
+                Environment.ExitCode = ServiceSimTest.Run(args.Length > 1 ? args[1] : Path.Combine(LegacyWriteRows.LegacyWriteRowsDatabaseFolderPath, "ClientVersionLog.indexfixed_202611060803.DB"), sb, ss, args.Length > 4 ? args[4] : null);
+                return;
+            }
+            if (args != null && args.Length > 3 && args[0] == "concurrentworker")
+            {
+                Environment.ExitCode = ConcurrentWriteTest.Worker(args[1], int.Parse(args[2]), int.Parse(args[3]));
+                return;
+            }
+            if (args != null && args.Length > 0 && args[0] == "dupkeytest")
+            {
+                Environment.ExitCode = DuplicateKeyTest.Run();
+                return;
+            }
+            if (args != null && args.Length > 0 && args[0] == "randomtables")
+            {
+                int rtTables = 12, rtWrites = 260, rtSeed = 0;
+                if (args.Length > 1) int.TryParse(args[1], out rtTables);
+                if (args.Length > 2) int.TryParse(args[2], out rtWrites);
+                if (args.Length > 3) int.TryParse(args[3], out rtSeed);
+                int rtProbe = 1;
+                if (args.Length > 5) int.TryParse(args[5], out rtProbe);
+                RandomTableWriteTest.Run(rtTables, rtWrites, rtSeed, null, args.Length > 4 && args[4] != "-" ? args[4] : null, rtProbe);
+                return;
+            }
+            if (args == null || args.Length == 0 || !int.TryParse(args[0], out legacyTestRowCount)) legacyTestRowCount = 10;
+            LegacyWriteComparisonTest.Run(writeCount: legacyTestRowCount);
+            return;
+
+            // For now I just want to focus on the above test, ignore all tests below here (for now).
+
+
+
+
 
             if (args.Length > 0 && args[0] == "libupdatetest")
             {
@@ -289,5 +370,10 @@ namespace ParadoxTest
                 return;
             }
         }
+    
+
+
+
+
     }
 }

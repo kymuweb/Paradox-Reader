@@ -151,6 +151,8 @@ namespace ParadoxDesktop
         {
             if (string.Equals(Path.GetExtension(path), ".sql", StringComparison.OrdinalIgnoreCase))
                 OpenSqlFile(path);
+            else if (string.Equals(Path.GetExtension(path), ".dbf", StringComparison.OrdinalIgnoreCase))
+                OpenDbf(path);
             else
                 OpenTable(path);
         }
@@ -169,6 +171,23 @@ namespace ParadoxDesktop
             catch (Exception ex)
             {
                 MessageBox.Show(this, "Failed to open SQL file:\r\n" + ex.Message, "Open",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        internal void OpenDbf(string dbfFilePath)
+        {
+            try
+            {
+                var viewer = new DbfViewerForm(dbfFilePath)
+                {
+                    MdiParent = this
+                };
+                viewer.Show();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Failed to open DBF file:\r\n" + ex.Message, "Open",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -204,6 +223,12 @@ namespace ParadoxDesktop
                 return;
             }
 
+            if (ActiveMdiChild is DbfViewerForm dbfViewer)
+            {
+                dbfViewer.SaveAsParadox();
+                return;
+            }
+
             MessageBox.Show(this, "No table or SQL file is currently open.", "Save As",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -219,6 +244,12 @@ namespace ParadoxDesktop
             if (ActiveSqlEditor != null)
             {
                 ActiveSqlEditor.ExportCsv();
+                return;
+            }
+
+            if (ActiveMdiChild is DbfViewerForm dbfViewer)
+            {
+                dbfViewer.ExportCsv();
                 return;
             }
 
@@ -285,6 +316,8 @@ namespace ParadoxDesktop
         {
             if (ActiveTableEditor != null)
                 ActiveTableEditor.Copy();
+            else if (ActiveMdiChild is DbfViewerForm dbfViewer)
+                dbfViewer.Copy();
             else
                 ActiveSqlEditor?.Copy();
         }
@@ -301,6 +334,8 @@ namespace ParadoxDesktop
         {
             if (ActiveTableEditor != null)
                 ActiveTableEditor.SelectAllCells();
+            else if (ActiveMdiChild is DbfViewerForm dbfViewer)
+                dbfViewer.SelectAll();
             else
                 ActiveSqlEditor?.SelectAll();
         }

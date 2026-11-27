@@ -7,4 +7,17 @@
   <PropertyGroup>
     <StartupObject />
   </PropertyGroup>
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>ParadoxReader</PackageId>
+    <Version>1.0.2</Version>
+    <Authors>Javier Garcia and Patrick Sims</Authors>
+    <Description>A library for reading and writing Paradox (.DB/.PX/.Xg#/.MB) database tables.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MedilinkPS/Paradox-Reader</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/MedilinkPS/Paradox-Reader</RepositoryUrl>
+    <PackageTags>paradox;database;dbase;bde</PackageTags>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
 </Project>

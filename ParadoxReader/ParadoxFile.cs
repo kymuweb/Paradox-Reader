@@ -182,6 +182,9 @@ namespace ParadoxReader
         /// <summary>refIntegrity (byte) @ 0x55. 0 for a freshly created file (no referential-integrity constraints).</summary>
         private byte refIntegrity;
 
+        /// <summary>For .Xnn/.XGn secondary index files, byte 0x55 holds the index options: 0x20 = unique, 0x01 = NOT case sensitive.</summary>
+        internal byte IndexOptions => refIntegrity;
+
         /// <summary>unknown56x57 (2 bytes) @ 0x56-0x57. Real BDE .DB/.Xnn/.XGn files always have 0x0020 here; .PX/.YGn files always have 0x0000 - confirmed empirically, same hasV4Header-gated pattern as unknown3Ex3F above.</summary>
         internal byte[] unknown56x57;  //array[$0056..$0057] of byte;
 
@@ -346,7 +349,7 @@ namespace ParadoxReader
             this.stream.Flush();
         }
 
-        public ParadoxFile(string filePath) : this(new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        public ParadoxFile(string filePath) : this(ParadoxFileOpen.Open(filePath))
         {
         }
 
@@ -356,6 +359,14 @@ namespace ParadoxReader
             this.reader = new BinaryReader(stream);
             stream.Position = 0;
             this.ReadHeader();
+
+            // BDE encrypts index blocks (not just .DB blocks) of password-protected tables.
+            if (FileType != ParadoxFileType.DbFileIndexed && FileType != ParadoxFileType.DbFileNotIndexed
+                && IsEncrypted && EncryptionKey != 0xFF00FF00 && maxTableSize > 0)
+            {
+                this.stream = new BlockCryptStream(stream, headerSize, maxTableSize * 0x400, EncryptionKey);
+                this.reader = new BinaryReader(this.stream);
+            }
         }
 
         public virtual void Dispose()

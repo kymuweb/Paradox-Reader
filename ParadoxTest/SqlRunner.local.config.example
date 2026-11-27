@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  Copy this file to SqlRunner.local.config (same folder) and set the real,
+  machine-specific path to SQLRunner.exe. SqlRunner.local.config
+  is git-ignored so each developer's path stays local and is never committed.
+-->
+<appSettings>
+	<add key="SqlRunnerExePath" value="C:\Temp\ParadoxSQLRunner.exe" />
+	<add key="CorpusDataRootPath" value="C:\Temp\ParadoxData" />
+	<add key="PdxrbldExePath" value="C:\Temp\Pdxrbld.exe" />
+	<!-- Semicolon-separated; each is passed to Pdxrbld as a /P argument. -->
+	<add key="PdxrbldPasswords" value="cfjxcut" />
+</appSettings>

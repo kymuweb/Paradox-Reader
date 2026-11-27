@@ -15,7 +15,7 @@ namespace ParadoxReader
         // Fields
         // ----------------------------------------------------------------
 
-        private readonly PrimaryIndexFile         PrimaryIndexFile;
+        internal readonly PrimaryIndexFile        PrimaryIndexFile;
         private readonly List<SecondaryIndexFile> secondaryIndexes = new List<SecondaryIndexFile>();
         private readonly ParadoxFile.FieldInfo[]          allFields;
         private readonly int                  primaryKeyFieldCount;
@@ -155,6 +155,19 @@ namespace ParadoxReader
         /// a write. Must be called after every insert/update/delete, once the .DB
         /// header's change count has been incremented.
         /// </summary>
+        public void SyncRecordCount(int tableRecordCount)
+        {
+            foreach (var idx in secondaryIndexes)
+                idx.SyncRecordCount(tableRecordCount);
+        }
+
+        public void OnRowAppended(object[] rowFieldValues, ushort blockNumber)
+        {
+            // Xgn row hints store the .DB block 1-based.
+            foreach (var idx in secondaryIndexes)
+                idx.OnRowAppended(rowFieldValues, (ushort)(blockNumber + 1));
+        }
+
         public void SyncChangeCount(byte changeCount1, byte changeCount2)
         {
             PrimaryIndexFile?.SyncChangeCount(changeCount1, changeCount2);
@@ -200,10 +213,23 @@ namespace ParadoxReader
         /// </summary>
         public void IncrementWriteCounter()
         {
-            PrimaryIndexFile?.IncrementWriteCounter();
+            // BDE/Pdxrbld requires .PX 0x2C == every incremental .XGn 0x2F, and the .YGn
+            // 0x2C counters to advance in lock-step with the .PX. Derive the .PX counter
+            // from the (already incremented, see SyncChangeCount) .XGn counter and move
+            // the .YGn counters by the same amount, so a previously interrupted or
+            // concurrent write can't leave them permanently out of step.
+            int xgCounter = -1;
+            foreach (var idx in secondaryIndexes)
+            {
+                xgCounter = idx.ReadXgnVersionCounter();
+                if (xgCounter >= 0) break;
+            }
+
+            int delta = PrimaryIndexFile != null ? PrimaryIndexFile.SetWriteCounter(xgCounter) : 1;
+            if (delta == 0) delta = 1;
 
             foreach (var idx in secondaryIndexes)
-                idx.IncrementWriteCounter();
+                idx.IncrementWriteCounterBy(idx.ReadXgnVersionCounter() >= 0 ? 1 : delta);
         }
 
         // ----------------------------------------------------------------
@@ -220,6 +246,7 @@ namespace ParadoxReader
                     var secondaryIndex = fileStreams != null && fileStreams.TryGetValue(info.FilePath, out var indexStream)
                         ? new SecondaryIndexFile(indexStream, info.FilePath, info.IndexedFields, info.FieldIndices)
                         : new SecondaryIndexFile(info.FilePath, info.IndexedFields, info.FieldIndices);
+                    secondaryIndex.IndexedFieldCount = info.IndexedFieldCount;
                     if (IsIndexOutOfDate(secondaryIndex.AutoIncVal, dbAutoIncVal))
                     {
                         secondaryIndex.MarkOutOfDate();
@@ -233,6 +260,37 @@ namespace ParadoxReader
                         $"[IndexManager] Failed to open {info.FilePath}: {ex.Message}");
                 }
             }
+
+            // Pair each flat .XGn with its .YGn companion (same ordinal).
+            foreach (var xg in secondaryIndexes)
+            {
+                if (!xg.IsFlatTable) continue;
+                string ext = Path.GetExtension(xg.FilePath);
+                if (ext.Length < 4) continue;
+                string yPath = Path.ChangeExtension(xg.FilePath, ".Y" + ext.Substring(2));
+                var yg = secondaryIndexes.Find(s => string.Equals(s.FilePath, yPath, StringComparison.OrdinalIgnoreCase));
+                if (yg == null) continue;
+                xg.Companion = yg;
+                yg.ManagedByCompanion = true;
+            }
+
+            // The legacy BDE writer never updates non-maintained indexes (or their .Yxx companion);
+            // Pdxrbld regenerates them. Writing them made Pdxrbld's verify step crash.
+            var skip = new HashSet<SecondaryIndexFile>();
+            foreach (var idx in secondaryIndexes)
+                if (idx.IsNonMaintained)
+                {
+                    skip.Add(idx);
+                    string ext = Path.GetExtension(idx.FilePath);
+                    if (ext.Length >= 3)
+                    {
+                        string yPath = Path.ChangeExtension(idx.FilePath, ".Y" + ext.Substring(2));
+                        var y = secondaryIndexes.Find(s => string.Equals(s.FilePath, yPath, StringComparison.OrdinalIgnoreCase));
+                        if (y != null) skip.Add(y);
+                    }
+                }
+            foreach (var idx in skip) idx.Dispose();
+            secondaryIndexes.RemoveAll(skip.Contains);
         }
 
         // ----------------------------------------------------------------

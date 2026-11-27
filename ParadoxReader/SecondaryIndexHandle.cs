@@ -35,6 +35,12 @@ namespace ParadoxReader
         /// </summary>
         public int[] FieldIndices => indexFile.FieldIndices;
 
+        /// <summary>True if this index is unique (duplicate keys are rejected).</summary>
+        public bool IsUnique => indexFile.IsUnique;
+
+        /// <summary>True if this index compares keys case sensitively.</summary>
+        public bool IsCaseSensitive => indexFile.IsCaseSensitive;
+
         /// <summary>
         /// Traverses this secondary index's B-tree, using
         /// <paramref name="condition"/> to prune branches (IsIndexPossible)

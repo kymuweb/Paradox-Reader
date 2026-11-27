@@ -9,7 +9,7 @@ namespace ParadoxReader
         internal class DataBlock
         {
             public ParadoxFile file;
-            ushort nextBlock;
+            internal ushort nextBlock;
             internal ushort blockNumber;
             short addDataSize;
             public byte[] data;

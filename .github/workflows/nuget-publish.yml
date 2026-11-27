@@ -1,0 +1,58 @@
+name: Publish NuGet Package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version to publish (e.g. 1.0.1). Required for manual runs."
+        required: true
+
+permissions:
+  id-token: write # required for NuGet Trusted Publishing (OIDC)
+  contents: read
+
+jobs:
+  pack-and-publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = "${{ github.event.release.tag_name }}".TrimStart('v')
+          }
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "No version could be determined from the release tag or workflow input."
+          }
+          echo "PACKAGE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Restore
+        run: dotnet restore ParadoxReader/ParadoxReader.csproj
+
+      - name: Build
+        run: dotnet build ParadoxReader/ParadoxReader.csproj -c Release --no-restore
+
+      - name: Pack
+        run: dotnet pack ParadoxReader/ParadoxReader.csproj -c Release --no-build -o nupkgs -p:PackageVersion=${{ env.PACKAGE_VERSION }}
+
+      - name: Login to NuGet (Trusted Publishing)
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          user: MedilinkPS
+
+      - name: Push to NuGet.org
+        run: dotnet nuget push "nupkgs\*.nupkg" --api-key ${{ steps.nuget_login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

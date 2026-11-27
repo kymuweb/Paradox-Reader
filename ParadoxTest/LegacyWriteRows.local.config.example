@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  Copy this file to LegacyWriteRows.local.config (same folder) and set the real,
+  machine-specific path to WriteRows.exe. LegacyWriteRows.local.config
+  is git-ignored so each developer's path stays local and is never committed.
+-->
+<appSettings>
+  <add key="LegacyWriteRowsExeFilePath" value="C:\Temp\ParadoxWriteRows.exe" />
+  <add key="LegacyWriteRowsDatabaseFolderPath" value="C:\Temp\data" />
+</appSettings>

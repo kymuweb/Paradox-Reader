@@ -87,7 +87,44 @@ namespace ParadoxTest
             }
         }
 
-        // Machine-specific; the BDE "Pdxrbld" (Paradox table rebuild) utility,
+        // Machine-specific; WriteRows.exe. Read from the appSettings-style
+        // file LegacyWriteRows.local.config (git-ignored - see
+        // LegacyWriteRows.local.config.example), key "LegacyWriteRowsExeFilePath". It is loaded
+        // directly because app.config's appSettings can only reference one external file       
+        // (already used by SqlRunner.local.config). Falls back to string.Empty.
+        internal static string GetLegacyWriteRowsExeFilePath()
+        {
+            return GetLegacyWriteRowsSetting("LegacyWriteRowsExeFilePath");
+        }
+
+        // Machine-specific folder containing the Paradox tables the legacy
+        // WriteRows.exe writes to. Same source/logic as GetLegacyWriteRowsExeFilePath,
+        // key "DatabaseFolderPath". Falls back to string.Empty.
+        internal static string GetLegacyWriteRowsDatabaseFolderPath()
+        {
+            return GetLegacyWriteRowsSetting("LegacyWriteRowsDatabaseFolderPath");
+        }
+
+        private static string GetLegacyWriteRowsSetting(string key)
+        {
+            try
+            {
+                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LegacyWriteRows.local.config");
+                if (!File.Exists(path)) return string.Empty;
+
+                var doc = System.Xml.Linq.XDocument.Load(path);
+                return doc.Descendants("add")
+                    .Where(e => string.Equals((string)e.Attribute("key"), key, StringComparison.OrdinalIgnoreCase))
+                    .Select(e => (string)e.Attribute("value"))
+                    .FirstOrDefault() ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        // Machine-specific; the BDE "Pdxrbld"
         // used as the known-good reference implementation to compare
         // ParadoxReader.TableRebuilder's output against. Configured via
         // appSettings key "PdxrbldExePath", normally set in
@@ -104,6 +141,27 @@ namespace ParadoxTest
             {
                 return string.Empty;
             }
+        }
+
+        // Passwords passed to Pdxrbld (one /P argument each) so password-protected
+        // tables never block on its "Enter master password" prompt. Configured via
+        // appSettings key "PdxrbldPasswords" (semicolon-separated) in the git-ignored
+        // SqlRunner.local.config. Defaults to the example password "cfjxcut".
+        internal static string[] GetPdxrbldPasswords()
+        {
+            string value = null;
+            try
+            {
+                value = System.Configuration.ConfigurationManager.AppSettings["PdxrbldPasswords"];
+            }
+            catch
+            {
+            }
+            if (string.IsNullOrWhiteSpace(value)) return new[] { "cfjxcut" };
+            return value.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0)
+                .ToArray();
         }
     }
 }

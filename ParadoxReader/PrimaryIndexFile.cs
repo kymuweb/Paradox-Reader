@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace ParadoxReader
@@ -88,7 +89,7 @@ namespace ParadoxReader
         // ----------------------------------------------------------------
 
         public PrimaryIndexFile(string pxFilePath, ParadoxFile.FieldInfo[] primaryKeyFields)
-            : this(new FileStream(pxFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite), pxFilePath, primaryKeyFields)
+            : this(ParadoxFileOpen.Open(pxFilePath), pxFilePath, primaryKeyFields)
         {
         }
 
@@ -150,6 +151,137 @@ namespace ParadoxReader
             // ParadoxTableFile) is 0-based, so convert at this API boundary.
             ushort pxBlockNumber = (ushort)(dbBlockNumber + 1);
 
+            var leaves = ReadLeafEntries();
+            leaves.RemoveAll(e => e.BlockNumber == pxBlockNumber);
+            if (recordCount > 0)
+            {
+                byte[] key = KeySerializer.Serialize(firstRowKeyValues, primaryKeyFields);
+                int pos = 0;
+                while (pos < leaves.Count && CompareKeys(key, leaves[pos].KeyData) >= 0) pos++;
+                leaves.Insert(pos, new PxEntry(key, pxBlockNumber, (ushort)recordCount));
+            }
+            WriteTree(leaves);
+        }
+
+        /// <summary>
+        /// Collects every leaf entry (one per .DB block) by descending from the
+        /// root for (pxLevelCount - 1) levels. Branch entries point at child
+        /// blocks; leaf entries point at .DB blocks.
+        /// </summary>
+        private List<PxEntry> ReadLeafEntries()
+        {
+            var result = new List<PxEntry>();
+            if (pxFile.stream.Length <= pxFile.headerSize || pxFile.RecordCount <= 0 || pxFile.pxRootBlockId == 0)
+                return result;
+            int levels = Math.Max(1, (int)pxFile.pxLevelCount);
+            CollectLeaves(ReadBlock(pxFile.pxRootBlockId), levels, result, 0);
+            return result;
+        }
+
+        private void CollectLeaves(PxBlock node, int level, List<PxEntry> result, int depth)
+        {
+            if (depth > MAX_TREE_DEPTH)
+                throw new InvalidOperationException(
+                    $"[PrimaryIndexFile.CollectLeaves] Exceeded max tree depth ({MAX_TREE_DEPTH}); " +
+                    "the index file appears to be corrupt or cyclic. Consider using TableRebuilder.Rebuild to rebuild the table and its indexes.");
+            if (level <= 1)
+            {
+                result.AddRange(node.Entries);
+                return;
+            }
+            foreach (var e in node.Entries)
+                CollectLeaves(ReadBlock(e.BlockNumber), level - 1, result, depth + 1);
+        }
+
+        /// <summary>
+        /// Rewrites the whole .PX tree in the layout Pdxrbld produces: root at
+        /// block 1, every block linked into a single next/prev chain in file
+        /// order (block header = next, prev, addDataSize), branch entries keyed
+        /// by their child's first key with the child's total record count,
+        /// and header RecordCount = total entries across all blocks.
+        /// </summary>
+        private void WriteTree(List<PxEntry> leaves)
+        {
+            int blockSize = pxFile.maxTableSize * 0x400;
+            int perBlock  = blockCapacity / entrySize;
+
+            var levels = new List<List<List<PxEntry>>>();
+            var current = leaves;
+            do
+            {
+                var groups = new List<List<PxEntry>>();
+                for (int i = 0; i < current.Count; i += perBlock)
+                    groups.Add(current.GetRange(i, Math.Min(perBlock, current.Count - i)));
+                if (groups.Count == 0) groups.Add(new List<PxEntry>());
+                levels.Add(groups);
+                if (groups.Count == 1) break;
+                current = groups.Select(g => new PxEntry(g[0].KeyData, 0,
+                    (ushort)Math.Min(ushort.MaxValue, g.Sum(e => (int)e.RecordCount)))).ToList();
+            } while (true);
+
+            // Number blocks root-first (block 1), then each lower level in order.
+            var ordered = new List<List<PxEntry>>();
+            for (int l = levels.Count - 1; l >= 0; l--) ordered.AddRange(levels[l]);
+            int idx = 1;
+            for (int l = levels.Count - 1; l > 0; l--)
+            {
+                int childStart = idx + levels[l].Count;
+                int c = 0;
+                foreach (var g in levels[l])
+                    for (int k = 0; k < g.Count; k++)
+                        g[k] = new PxEntry(g[k].KeyData, (ushort)(childStart + c++), g[k].RecordCount);
+                idx += levels[l].Count;
+            }
+
+            ushort n = (ushort)ordered.Count;
+            pxFile.stream.SetLength(pxFile.headerSize + (long)n * blockSize);
+            for (int b = 0; b < n; b++)
+            {
+                var entries = ordered[b];
+                pxFile.stream.Position = pxFile.headerSize + (long)b * blockSize;
+                using (var w = new BinaryWriter(new NonClosingStreamWrapper(pxFile.stream), Encoding.Default))
+                {
+                    w.Write((ushort)(b + 1 < n ? b + 2 : 0)); // next
+                    w.Write((ushort)b);                         // prev (0 for first)
+                    w.Write((short)((entries.Count - 1) * entrySize));
+                    foreach (var e in entries)
+                    {
+                        w.Write(e.KeyData);
+                        WriteSignFlippedUInt16(w, e.BlockNumber);
+                        WriteSignFlippedUInt16(w, e.RecordCount);
+                        WriteSignFlippedUInt16(w, 0);
+                    }
+                    int rem = blockSize - HEADER_SIZE - entries.Count * entrySize;
+                    if (rem > 0) w.Write(new byte[rem]);
+                }
+            }
+
+            pxFile.firstBlock = 1;
+            pxFile.nextBlock  = n;
+            pxFile.lastBlock  = n;
+            pxFile.fileBlocks = n;
+            pxFile.stream.Position = ParadoxHeaderOffsets.BlockChain;
+            using (var w = new BinaryWriter(new NonClosingStreamWrapper(pxFile.stream), Encoding.Default))
+            {
+                w.Write(pxFile.nextBlock);
+                w.Write(pxFile.fileBlocks);
+                w.Write(pxFile.firstBlock);
+                w.Write(pxFile.lastBlock);
+            }
+            if (n > pxFile.maxBlocks)
+            {
+                pxFile.maxBlocks = n;
+                pxFile.stream.Position = ParadoxHeaderOffsets.MaxBlocks;
+                using (var w = new BinaryWriter(new NonClosingStreamWrapper(pxFile.stream), Encoding.Default))
+                    w.Write(pxFile.maxBlocks);
+            }
+            UpdateRootBlockId(1);
+            UpdateLevelCount((byte)levels.Count);
+            UpdateRecordCount(ordered.Sum(g => g.Count));
+        }
+
+        private void LegacyOnBlockChanged(object[] firstRowKeyValues, ushort pxBlockNumber, int recordCount)
+        {
             if (recordCount <= 0)
             {
                 RemoveBlockEntry(pxBlockNumber);
@@ -210,7 +342,9 @@ namespace ParadoxReader
         /// </summary>
         public void SyncAutoIncVal(int autoIncVal)
         {
-            pxFile.autoIncVal = autoIncVal;
+            // Observed against the legacy writer: the .PX counts writes (+1 each)
+            // rather than mirroring the table's autoIncVal.
+            pxFile.autoIncVal = pxFile.autoIncVal + 1;
             pxFile.stream.Position = ParadoxHeaderOffsets.AutoIncVal;
             using (var w = new BinaryWriter(new NonClosingStreamWrapper(pxFile.stream), Encoding.Default))
                 w.Write(pxFile.autoIncVal);
@@ -243,12 +377,26 @@ namespace ParadoxReader
         /// </summary>
         public void IncrementWriteCounter()
         {
+            SetWriteCounter(-1);
+        }
+
+        /// <summary>
+        /// Advances the .PX write counter (0x2C). When <paramref name="target"/> is
+        /// non-negative the counter is set to it (used to re-align with the Xgn 0x2F
+        /// counter); otherwise it is incremented. Returns how many steps (mod 255) it moved.
+        /// </summary>
+        internal int SetWriteCounter(int target)
+        {
             pxFile.stream.Position = ParadoxHeaderOffsets.WriteCounter;
             int current = pxFile.stream.ReadByte();
             if (current < 0) current = 0;
-            byte next = (byte)(current + 1);
+            // Legacy never produces 0xFF here: the counter goes 0xFE -> 0x00 (modulo 255), and the legacy tool cannot open an index whose counter is 0xFF.
+            byte next = target >= 0 && target < 0xFF
+                ? (byte)target
+                : current >= 0xFE ? (byte)0 : (byte)(current + 1);
             pxFile.stream.Position = ParadoxHeaderOffsets.WriteCounter;
             pxFile.stream.WriteByte(next);
+            return (next - current + 255) % 255;
         }
 
         // ----------------------------------------------------------------
@@ -510,7 +658,7 @@ namespace ParadoxReader
                 r.ReadUInt16(); // reserved
                 r.ReadUInt16(); // usedBytes (derived from Entries at write time; not needed on read)
                 int bytesRead = HEADER_SIZE;
-                while (bytesRead + entrySize <= blockCapacity)
+                while (bytesRead + entrySize <= HEADER_SIZE + blockCapacity)
                 {
                     byte[] key = r.ReadBytes(keyDataSize);
                     if (IsEmptyKey(key)) break;

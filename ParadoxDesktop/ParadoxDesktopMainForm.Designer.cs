@@ -374,7 +374,7 @@
             // openFileDialog
             //
             this.openFileDialog.DefaultExt = "db";
-            this.openFileDialog.Filter = "Paradox tables and SQL scripts (*.db;*.sql)|*.db;*.sql|Paradox tables (*.db)|*.db|SQL scripts (*.sql)|*.sql|All files (*.*)|*.*";
+            this.openFileDialog.Filter = "Paradox, dBase tables and SQL scripts (*.db;*.dbf;*.sql)|*.db;*.dbf;*.sql|Paradox tables (*.db)|*.db|dBase tables (*.dbf)|*.dbf|SQL scripts (*.sql)|*.sql|All files (*.*)|*.*";
             this.openFileDialog.Title = "Open";
             //
             // mainToolStrip

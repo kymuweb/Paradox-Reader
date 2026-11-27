@@ -134,13 +134,39 @@ namespace ParadoxReader
             {
                 var values = new object[fieldTypes.Length];
                 for (int i = 0; i < fieldTypes.Length; i++)
-                    values[i] = ReadField(r, file, fieldTypes[i]);
+                {
+                    try
+                    {
+                        values[i] = ReadField(r, file, fieldTypes[i]);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException || ex is OverflowException || ex is InvalidCastException || ex is FormatException)
+                    {
+                        throw new InvalidDataException(
+                            DescribeReadFailure(block, file, recIndex, i, fieldTypes[i], ex), ex);
+                    }
+                }
                 return values;
             }
         }
 
+        private static string DescribeReadFailure(ParadoxFile.DataBlock block, ParadoxFile file,
+            int recIndex, int fieldIndex, ParadoxFile.FieldInfo field, Exception ex)
+        {
+            try
+            {
+                string name = (file.FieldNames != null && fieldIndex < file.FieldNames.Length)
+                    ? file.FieldNames[fieldIndex] : "?";
+                return $"Failed to read field '{name}' (index {fieldIndex}, type {field.fType}) " +
+                       $"at block {block.blockNumber}, record {recIndex} (0-based): {ex.Message}";
+            }
+            catch
+            {
+                return $"Failed to read record data: {ex.Message}";
+            }
+        }
+
         /// <summary>
-        /// Deserializes raw record bytes (as stored in a .DB data block) back
+        /// Deserializes
         /// into field values, using the same per-field decoding as the
         /// in-memory read path. Used by <see cref="ParadoxTableFile"/> to
         /// determine a block's first-row key values after an insert/update/

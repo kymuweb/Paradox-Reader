@@ -37,6 +37,12 @@ namespace ParadoxTest
         public static bool IsAvailable => !string.IsNullOrEmpty(ExePath) && File.Exists(ExePath);
 
         /// <summary>
+        /// Passwords for password-protected tables, from the PdxrbldPasswords setting
+        /// (see Configuration.GetPdxrbldPasswords). Pdxrbld accepts multiple /P arguments.
+        /// </summary>
+        public static string[] Passwords => Configuration.GetPdxrbldPasswords();
+
+        /// <summary>
         /// Runs Pdxrbld against <paramref name="tableFileName"/> in
         /// <paramref name="dataFolder"/>, always doing a verify + rebuild
         /// (-R2), with logging (-L+) and quiet/silent mode (-Q+). Confirms
@@ -48,6 +54,9 @@ namespace ParadoxTest
         /// <param name="tableFileName">Table file name, e.g. "testtab.db" (Pdxrbld's /T argument).</param>
         /// <param name="pack">Whether to pack the table (-P+); pass false to skip packing (-P-).</param>
         /// <param name="timeoutMs">How long to wait before treating Pdxrbld as hung and killing it.</param>
+        /// <summary>Exit code of the last Rebuild run; null when it timed out.</summary>
+        public static int? LastExitCode;
+
         public static bool Rebuild(string dataFolder, string tableFileName, bool pack = true, int timeoutMs = 15000)
         {
             EnsureNoStrayProcesses();
@@ -58,14 +67,15 @@ namespace ParadoxTest
             var psi = new ProcessStartInfo
             {
                 FileName = ExePath,
-                Arguments = string.Format("\"/F{0}\" \"/T{1}\" -R2 {2} -L+ -Q+", dataFolder, tableFileName, pack ? "-P+" : "-P-"),
+                Arguments = string.Format("\"/F{0}\" \"/T{1}\" {2} -R2 {3} -L+ -Q+", dataFolder, tableFileName,
+                    string.Join(" ", Passwords.Select(p => "\"/P" + p + "\"")), pack ? "-P+" : "-P-"),
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
 
-            Console.WriteLine("Pdxrbld> {0}", psi.Arguments);
+            Console.WriteLine("Pdxrbld> {0}", System.Text.RegularExpressions.Regex.Replace(psi.Arguments, "\"/P[^\"]*\"", "\"/P***\""));
 
             using (var process = new Process { StartInfo = psi })
             {
@@ -75,8 +85,13 @@ namespace ParadoxTest
                     Console.WriteLine("  [warn] Pdxrbld did not exit within {0}ms; treating as HUNG. Killing process.", timeoutMs);
                     try { process.Kill(); } catch { /* best effort */ }
                     process.WaitForExit();
+                    LastExitCode = null;
                     return false;
                 }
+                process.WaitForExit();
+                LastExitCode = process.ExitCode;
+                if (process.ExitCode != 0)
+                    Console.WriteLine("  [FAIL] Pdxrbld exit code {0} (0x{0:X8}).", process.ExitCode);
             }
 
             if (!File.Exists(logPath))

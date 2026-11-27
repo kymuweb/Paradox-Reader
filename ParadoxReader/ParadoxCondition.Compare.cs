@@ -1,4 +1,4 @@
-namespace ParadoxReader
+﻿namespace ParadoxReader
 {
     public partial class ParadoxCondition
     {
@@ -83,7 +83,7 @@ namespace ParadoxReader
             /// punctuation/symbols in the default codepage), causing index
             /// traversal to prune the wrong subtree and miss matching rows.
             /// </summary>
-            private static int CompareValues(object a, object b)
+            internal static int CompareValues(object a, object b)
             {
                 if (a is string sa && b is string sb)
                     return string.CompareOrdinal(sa, sb);

@@ -152,7 +152,7 @@ namespace ParadoxReader
         /// name, e.g. via Table > Restructure's index column checkboxes) use
         /// .Xnn/.Ynn naming where nn is the hex 1-based indexed-field
         /// position - confirmed against a real installed application's data
-        /// (C:\medilink32bnt\data\!transac.X06 etc). However, SQLRunner's
+        /// (C:\data\!transac.X06 etc). However, SQLRunner's
         /// CREATE INDEX (equivalent to what TableCreator/TableRebuilder
         /// synthesize from a TableIndexDefinition - always a *named* index)
         /// produces .XGn/.YGn regardless of field count - confirmed by
@@ -180,7 +180,8 @@ namespace ParadoxReader
             // RecordCount <= 0) and allocates the first leaf block itself on
             // the very first insert, exactly as it does for a freshly
             // rebuilt/cloned index skeleton (see TableRebuilder).
-            return BuildHeader(schema, ParadoxFileType.XgnFileInc, fields, includeFieldNames: false, indexFieldNumber: indexFieldNumber);
+            byte indexOptions = (byte)((index.IsUnique ? 0x20 : 0) | (index.IsCaseSensitive ? 0 : 0x01));
+            return BuildHeader(schema, ParadoxFileType.XgnFileInc, fields, includeFieldNames: false, indexFieldNumber: indexFieldNumber, indexOptions: indexOptions);
         }
 
         /// <summary>
@@ -261,7 +262,8 @@ namespace ParadoxReader
             bool includeFieldNames,
             int indexFieldNumber = -1,
             int? recordSizeOverride = null,
-            byte? maxTableSizeOverride = null)
+            byte? maxTableSizeOverride = null,
+            byte indexOptions = 0)
         {
             byte maxTableSize = maxTableSizeOverride ?? DefaultMaxTableSize;
             using (var ms = new MemoryStream())
@@ -425,7 +427,7 @@ namespace ParadoxReader
                 w.Write((ushort)realHeaderSize);     // 0x51-0x52 realHeaderSize
                 w.Write((byte)0);                    // 0x53-0x54 unknown53x54 (only 1 byte remains here; see below)
                 w.Write((byte)0);                    // pad to keep total 0x50-0x54 span at 5 bytes
-                w.Write((byte)0);                    // 0x55 refIntegrity
+                w.Write(indexOptions);               // 0x55 refIntegrity (secondary index: 0x20 unique, 0x01 not case sensitive)
                 // 0x56-0x57: real BDE .DB/.Xnn/.XGn files always have 0x0020
                 // here; .PX/.YGn files always have 0x0000 (confirmed across
                 // every fixture in ParadoxTest\data).

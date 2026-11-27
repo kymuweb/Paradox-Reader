@@ -109,6 +109,12 @@ namespace ParadoxReader
         /// </summary>
         public List<int> FieldIndices { get; set; } = new List<int>();
 
+        /// <summary>True if the index is unique (header byte 0x55 bit 0x20); duplicate keys are rejected.</summary>
+        public bool IsUnique { get; set; }
+
+        /// <summary>True if the index is case sensitive. Stored inverted (bit 0x01 of header byte 0x55 means NOT case sensitive).</summary>
+        public bool IsCaseSensitive { get; set; } = true;
+
         public TableIndexDefinition()
         {
         }
@@ -175,7 +181,11 @@ namespace ParadoxReader
 
             foreach (var index in table.SecondaryIndexes)
             {
-                schema.Indexes.Add(new TableIndexDefinition(index.FieldIndices));
+                schema.Indexes.Add(new TableIndexDefinition(index.FieldIndices)
+                {
+                    IsUnique        = index.IsUnique,
+                    IsCaseSensitive = index.IsCaseSensitive
+                });
             }
 
             return schema;

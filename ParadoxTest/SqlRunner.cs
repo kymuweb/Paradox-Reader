@@ -8,11 +8,11 @@ using System.Text.RegularExpressions;
 namespace ParadoxTest
 {
     /// <summary>
-    /// Consolidated helper for invoking Medilink.Tools.SQLRunner.exe against a
+    /// Consolidated helper for invoking SQLRunner.exe against a
     /// Paradox .DB table for test/diagnostic purposes, e.g.:
     ///
-    ///   Medilink.Tools.SQLRunner.exe /S "select count(*) from 'c:\temp\testtab.db'"
-    ///   Medilink.Tools.SQLRunner.exe /S "delete from 'c:\temp\testtab.db'"
+    ///   SQLRunner.exe /S "select count(*) from 'c:\temp\testtab.db'"
+    ///   SQLRunner.exe /S "delete from 'c:\temp\testtab.db'"
     ///
     /// (/S = silent). Runs are always synchronous (no async/await) and
     /// single-instance: every call first force-kills any stray SQLRunner
@@ -24,7 +24,7 @@ namespace ParadoxTest
     internal static class SqlRunner
     {
         /// <summary>
-        /// Machine-specific path to Medilink.Tools.SQLRunner.exe, sourced from
+        /// Machine-specific path to SQLRunner.exe, sourced from
         /// app.config's appSettings (via SqlRunner.local.config, git-ignored -
         /// see SqlRunner.local.config.example). Empty when unset/missing.
         /// </summary>

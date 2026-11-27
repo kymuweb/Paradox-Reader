@@ -2,6 +2,10 @@
 # ParadoxTest/SqlRunner.local.config.example for the template.
 ParadoxTest/SqlRunner.local.config
 
+# Machine-specific WriteRows.exe path - see
+# ParadoxTest/LegacyWriteRows.local.config.example for the template.
+ParadoxTest/LegacyWriteRows.local.config
+
 # Windows image file caches
 Thumbs.db
 ehthumbs.db
@@ -58,5 +62,7 @@ Temporary Items
 bin/
 obj/
 *.LCK
-ParadoxTest/SqlRunner.local.config.example
-/.github
+/.github/upgrades
+ParadoxTest/IdapiReferences/idapi.h
+ParadoxTest/IdapiReferences/idapi32.dll
+ParadoxTest/IdapiReferences/idapi32.lib

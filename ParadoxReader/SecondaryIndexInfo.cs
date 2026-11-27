@@ -17,5 +17,8 @@ namespace ParadoxReader
         /// corresponding to IndexedFields.
         /// </summary>
         public int[] FieldIndices { get; set; }
+
+        /// <summary>Number of leading FieldIndices that are the user's indexed fields (the rest are appended primary-key fields).</summary>
+        public int IndexedFieldCount { get; set; }
     }
 }

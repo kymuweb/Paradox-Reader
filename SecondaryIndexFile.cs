@@ -1,0 +1,1 @@
+﻿ParadoxReader.ParadoxCondition+Compare

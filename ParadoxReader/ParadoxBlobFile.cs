@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
@@ -22,7 +22,7 @@ namespace ParadoxReader
         private readonly BinaryReader reader;
 
         public ParadoxBlobFile(string fileName)
-            : this(new FileStream(fileName, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+            : this(ParadoxFileOpen.Open(fileName))
         {
         }
 
